@@ -58,6 +58,9 @@ for service in $(kubectl get -n c9s-clos svc -o jsonpath='{.items[*].metadata.na
       --network host \
       --restart unless-stopped \
       -v /var/run/dbus:/var/run/dbus:rw \
+      -v /etc/sonic/sonic_version.yml:/etc/sonic/sonic_version.yml:ro \
+      -v /usr/local/lib/:/usr/local/lib/:rw \
+      -v /usr/local/bin/sonic-host-server:/usr/local/bin/sonic-host-server:rw \
       "${REMOTE_IMAGE_SPEC}" \
       -port 57400
 EOF

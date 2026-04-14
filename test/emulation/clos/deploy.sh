@@ -108,7 +108,7 @@ else
       while [ $attempt -le $max_attempts ]; do
         if sshpass -p 'admin' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null admin@"$h" 'bash -s' < $(readlink -f $(dirname "$0"))/init_setup.sh; then
           echo "Successfully provisioned $h"
-          break
+   break
         else
           if [ $attempt -lt $max_attempts ]; then
             echo "Provisioning attempt $attempt of $max_attempts failed for $h. Retrying in 10 seconds..."

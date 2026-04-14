@@ -206,19 +206,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	setupLog.Info("starting HTTP server")
-	provServer, err := setupProvisioningServer(httpServerAddr, onieInstallerDir, ztpConfigFile)
-	if err != nil {
-		setupLog.Error(err, "unable to setup HTTP server")
-		os.Exit(1)
-	}
-
-	go func() {
-		if err := provServer.ListenAndServe(); err != nil {
-			setupLog.Error(err, "http server failed")
-			os.Exit(1)
-		}
-	}()
+	//setupLog.Info("starting HTTP server")
+	//provServer, err := setupProvisioningServer(httpServerAddr, onieInstallerDir, ztpConfigFile)
+	//if err != nil {
+	//	setupLog.Error(err, "unable to setup HTTP server")
+	//	os.Exit(1)
+	//}
+	//
+	//go func() {
+	//	if err := provServer.ListenAndServe(); err != nil {
+	//		setupLog.Error(err, "http server failed")
+	//		os.Exit(1)
+	//	}
+	//}()
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
