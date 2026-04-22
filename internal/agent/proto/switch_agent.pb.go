@@ -1305,6 +1305,102 @@ func (x *RestartSystemdServiceResponse) GetStatus() *Status {
 	return nil
 }
 
+type GetAgentVersionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetAgentVersionRequest) Reset() {
+	*x = GetAgentVersionRequest{}
+	mi := &file_internal_agent_proto_switch_agent_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetAgentVersionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetAgentVersionRequest) ProtoMessage() {}
+
+func (x *GetAgentVersionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_agent_proto_switch_agent_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetAgentVersionRequest.ProtoReflect.Descriptor instead.
+func (*GetAgentVersionRequest) Descriptor() ([]byte, []int) {
+	return file_internal_agent_proto_switch_agent_proto_rawDescGZIP(), []int{26}
+}
+
+type GetAgentVersionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	Version       string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	BuildTime     string                 `protobuf:"bytes,3,opt,name=build_time,json=buildTime,proto3" json:"build_time,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetAgentVersionResponse) Reset() {
+	*x = GetAgentVersionResponse{}
+	mi := &file_internal_agent_proto_switch_agent_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetAgentVersionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetAgentVersionResponse) ProtoMessage() {}
+
+func (x *GetAgentVersionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_agent_proto_switch_agent_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetAgentVersionResponse.ProtoReflect.Descriptor instead.
+func (*GetAgentVersionResponse) Descriptor() ([]byte, []int) {
+	return file_internal_agent_proto_switch_agent_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *GetAgentVersionResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+func (x *GetAgentVersionResponse) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *GetAgentVersionResponse) GetBuildTime() string {
+	if x != nil {
+		return x.BuildTime
+	}
+	return ""
+}
+
 var File_internal_agent_proto_switch_agent_proto protoreflect.FileDescriptor
 
 const file_internal_agent_proto_switch_agent_proto_rawDesc = "" +
@@ -1386,7 +1482,13 @@ const file_internal_agent_proto_switch_agent_proto_rawDesc = "" +
 	"\x1cRestartSystemdServiceRequest\x12!\n" +
 	"\fservice_name\x18\x01 \x01(\tR\vserviceName\"O\n" +
 	"\x1dRestartSystemdServiceResponse\x12.\n" +
-	"\x06status\x18\x01 \x01(\v2\x16.switchagent.v1.StatusR\x06status2\xe9\b\n" +
+	"\x06status\x18\x01 \x01(\v2\x16.switchagent.v1.StatusR\x06status\"\x18\n" +
+	"\x16GetAgentVersionRequest\"\x82\x01\n" +
+	"\x17GetAgentVersionResponse\x12.\n" +
+	"\x06status\x18\x01 \x01(\v2\x16.switchagent.v1.StatusR\x06status\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1d\n" +
+	"\n" +
+	"build_time\x18\x03 \x01(\tR\tbuildTime2\xcd\t\n" +
 	"\x12SwitchAgentService\x12\\\n" +
 	"\rGetDeviceInfo\x12$.switchagent.v1.GetDeviceInfoRequest\x1a%.switchagent.v1.GetDeviceInfoResponse\x12_\n" +
 	"\x0eListInterfaces\x12%.switchagent.v1.ListInterfacesRequest\x1a&.switchagent.v1.ListInterfacesResponse\x12z\n" +
@@ -1399,7 +1501,8 @@ const file_internal_agent_proto_switch_agent_proto_rawDesc = "" +
 	"SaveConfig\x12!.switchagent.v1.SaveConfigRequest\x1a\".switchagent.v1.SaveConfigResponse\x12G\n" +
 	"\x06Reboot\x12\x1d.switchagent.v1.RebootRequest\x1a\x1e.switchagent.v1.RebootResponse\x12n\n" +
 	"\x13OnieBootModeInstall\x12*.switchagent.v1.OnieBootModeInstallRequest\x1a+.switchagent.v1.OnieBootModeInstallResponse\x12t\n" +
-	"\x15RestartSystemdService\x12,.switchagent.v1.RestartSystemdServiceRequest\x1a-.switchagent.v1.RestartSystemdServiceResponseB\x14Z\x12./switchagentprotob\x06proto3"
+	"\x15RestartSystemdService\x12,.switchagent.v1.RestartSystemdServiceRequest\x1a-.switchagent.v1.RestartSystemdServiceResponse\x12b\n" +
+	"\x0fGetAgentVersion\x12&.switchagent.v1.GetAgentVersionRequest\x1a'.switchagent.v1.GetAgentVersionResponseB\x14Z\x12./switchagentprotob\x06proto3"
 
 var (
 	file_internal_agent_proto_switch_agent_proto_rawDescOnce sync.Once
@@ -1413,7 +1516,7 @@ func file_internal_agent_proto_switch_agent_proto_rawDescGZIP() []byte {
 	return file_internal_agent_proto_switch_agent_proto_rawDescData
 }
 
-var file_internal_agent_proto_switch_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_internal_agent_proto_switch_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_internal_agent_proto_switch_agent_proto_goTypes = []any{
 	(*Status)(nil),                          // 0: switchagent.v1.Status
 	(*GetDeviceInfoRequest)(nil),            // 1: switchagent.v1.GetDeviceInfoRequest
@@ -1441,6 +1544,8 @@ var file_internal_agent_proto_switch_agent_proto_goTypes = []any{
 	(*OnieBootModeInstallResponse)(nil),     // 23: switchagent.v1.OnieBootModeInstallResponse
 	(*RestartSystemdServiceRequest)(nil),    // 24: switchagent.v1.RestartSystemdServiceRequest
 	(*RestartSystemdServiceResponse)(nil),   // 25: switchagent.v1.RestartSystemdServiceResponse
+	(*GetAgentVersionRequest)(nil),          // 26: switchagent.v1.GetAgentVersionRequest
+	(*GetAgentVersionResponse)(nil),         // 27: switchagent.v1.GetAgentVersionResponse
 }
 var file_internal_agent_proto_switch_agent_proto_depIdxs = []int32{
 	0,  // 0: switchagent.v1.GetDeviceInfoResponse.status:type_name -> switchagent.v1.Status
@@ -1460,33 +1565,36 @@ var file_internal_agent_proto_switch_agent_proto_depIdxs = []int32{
 	0,  // 14: switchagent.v1.RebootResponse.status:type_name -> switchagent.v1.Status
 	0,  // 15: switchagent.v1.OnieBootModeInstallResponse.status:type_name -> switchagent.v1.Status
 	0,  // 16: switchagent.v1.RestartSystemdServiceResponse.status:type_name -> switchagent.v1.Status
-	1,  // 17: switchagent.v1.SwitchAgentService.GetDeviceInfo:input_type -> switchagent.v1.GetDeviceInfoRequest
-	4,  // 18: switchagent.v1.SwitchAgentService.ListInterfaces:input_type -> switchagent.v1.ListInterfacesRequest
-	6,  // 19: switchagent.v1.SwitchAgentService.SetInterfaceAdminStatus:input_type -> switchagent.v1.SetInterfaceAdminStatusRequest
-	16, // 20: switchagent.v1.SwitchAgentService.SetInterfaceAliasName:input_type -> switchagent.v1.SetInterfaceAliasNameRequest
-	14, // 21: switchagent.v1.SwitchAgentService.GetInterface:input_type -> switchagent.v1.GetInterfaceRequest
-	11, // 22: switchagent.v1.SwitchAgentService.GetInterfaceNeighbor:input_type -> switchagent.v1.GetInterfaceNeighborRequest
-	8,  // 23: switchagent.v1.SwitchAgentService.ListPorts:input_type -> switchagent.v1.ListPortsRequest
-	18, // 24: switchagent.v1.SwitchAgentService.SaveConfig:input_type -> switchagent.v1.SaveConfigRequest
-	20, // 25: switchagent.v1.SwitchAgentService.Reboot:input_type -> switchagent.v1.RebootRequest
-	22, // 26: switchagent.v1.SwitchAgentService.OnieBootModeInstall:input_type -> switchagent.v1.OnieBootModeInstallRequest
-	24, // 27: switchagent.v1.SwitchAgentService.RestartSystemdService:input_type -> switchagent.v1.RestartSystemdServiceRequest
-	2,  // 28: switchagent.v1.SwitchAgentService.GetDeviceInfo:output_type -> switchagent.v1.GetDeviceInfoResponse
-	5,  // 29: switchagent.v1.SwitchAgentService.ListInterfaces:output_type -> switchagent.v1.ListInterfacesResponse
-	7,  // 30: switchagent.v1.SwitchAgentService.SetInterfaceAdminStatus:output_type -> switchagent.v1.SetInterfaceAdminStatusResponse
-	17, // 31: switchagent.v1.SwitchAgentService.SetInterfaceAliasName:output_type -> switchagent.v1.SetInterfaceAliasNameResponse
-	15, // 32: switchagent.v1.SwitchAgentService.GetInterface:output_type -> switchagent.v1.GetInterfaceResponse
-	13, // 33: switchagent.v1.SwitchAgentService.GetInterfaceNeighbor:output_type -> switchagent.v1.GetInterfaceNeighborResponse
-	9,  // 34: switchagent.v1.SwitchAgentService.ListPorts:output_type -> switchagent.v1.ListPortsResponse
-	19, // 35: switchagent.v1.SwitchAgentService.SaveConfig:output_type -> switchagent.v1.SaveConfigResponse
-	21, // 36: switchagent.v1.SwitchAgentService.Reboot:output_type -> switchagent.v1.RebootResponse
-	23, // 37: switchagent.v1.SwitchAgentService.OnieBootModeInstall:output_type -> switchagent.v1.OnieBootModeInstallResponse
-	25, // 38: switchagent.v1.SwitchAgentService.RestartSystemdService:output_type -> switchagent.v1.RestartSystemdServiceResponse
-	28, // [28:39] is the sub-list for method output_type
-	17, // [17:28] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	0,  // 17: switchagent.v1.GetAgentVersionResponse.status:type_name -> switchagent.v1.Status
+	1,  // 18: switchagent.v1.SwitchAgentService.GetDeviceInfo:input_type -> switchagent.v1.GetDeviceInfoRequest
+	4,  // 19: switchagent.v1.SwitchAgentService.ListInterfaces:input_type -> switchagent.v1.ListInterfacesRequest
+	6,  // 20: switchagent.v1.SwitchAgentService.SetInterfaceAdminStatus:input_type -> switchagent.v1.SetInterfaceAdminStatusRequest
+	16, // 21: switchagent.v1.SwitchAgentService.SetInterfaceAliasName:input_type -> switchagent.v1.SetInterfaceAliasNameRequest
+	14, // 22: switchagent.v1.SwitchAgentService.GetInterface:input_type -> switchagent.v1.GetInterfaceRequest
+	11, // 23: switchagent.v1.SwitchAgentService.GetInterfaceNeighbor:input_type -> switchagent.v1.GetInterfaceNeighborRequest
+	8,  // 24: switchagent.v1.SwitchAgentService.ListPorts:input_type -> switchagent.v1.ListPortsRequest
+	18, // 25: switchagent.v1.SwitchAgentService.SaveConfig:input_type -> switchagent.v1.SaveConfigRequest
+	20, // 26: switchagent.v1.SwitchAgentService.Reboot:input_type -> switchagent.v1.RebootRequest
+	22, // 27: switchagent.v1.SwitchAgentService.OnieBootModeInstall:input_type -> switchagent.v1.OnieBootModeInstallRequest
+	24, // 28: switchagent.v1.SwitchAgentService.RestartSystemdService:input_type -> switchagent.v1.RestartSystemdServiceRequest
+	26, // 29: switchagent.v1.SwitchAgentService.GetAgentVersion:input_type -> switchagent.v1.GetAgentVersionRequest
+	2,  // 30: switchagent.v1.SwitchAgentService.GetDeviceInfo:output_type -> switchagent.v1.GetDeviceInfoResponse
+	5,  // 31: switchagent.v1.SwitchAgentService.ListInterfaces:output_type -> switchagent.v1.ListInterfacesResponse
+	7,  // 32: switchagent.v1.SwitchAgentService.SetInterfaceAdminStatus:output_type -> switchagent.v1.SetInterfaceAdminStatusResponse
+	17, // 33: switchagent.v1.SwitchAgentService.SetInterfaceAliasName:output_type -> switchagent.v1.SetInterfaceAliasNameResponse
+	15, // 34: switchagent.v1.SwitchAgentService.GetInterface:output_type -> switchagent.v1.GetInterfaceResponse
+	13, // 35: switchagent.v1.SwitchAgentService.GetInterfaceNeighbor:output_type -> switchagent.v1.GetInterfaceNeighborResponse
+	9,  // 36: switchagent.v1.SwitchAgentService.ListPorts:output_type -> switchagent.v1.ListPortsResponse
+	19, // 37: switchagent.v1.SwitchAgentService.SaveConfig:output_type -> switchagent.v1.SaveConfigResponse
+	21, // 38: switchagent.v1.SwitchAgentService.Reboot:output_type -> switchagent.v1.RebootResponse
+	23, // 39: switchagent.v1.SwitchAgentService.OnieBootModeInstall:output_type -> switchagent.v1.OnieBootModeInstallResponse
+	25, // 40: switchagent.v1.SwitchAgentService.RestartSystemdService:output_type -> switchagent.v1.RestartSystemdServiceResponse
+	27, // 41: switchagent.v1.SwitchAgentService.GetAgentVersion:output_type -> switchagent.v1.GetAgentVersionResponse
+	30, // [30:42] is the sub-list for method output_type
+	18, // [18:30] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_internal_agent_proto_switch_agent_proto_init() }
@@ -1500,7 +1608,7 @@ func file_internal_agent_proto_switch_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_agent_proto_switch_agent_proto_rawDesc), len(file_internal_agent_proto_switch_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   26,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

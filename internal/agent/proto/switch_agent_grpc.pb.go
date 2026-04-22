@@ -31,6 +31,7 @@ const (
 	SwitchAgentService_Reboot_FullMethodName                  = "/switchagent.v1.SwitchAgentService/Reboot"
 	SwitchAgentService_OnieBootModeInstall_FullMethodName     = "/switchagent.v1.SwitchAgentService/OnieBootModeInstall"
 	SwitchAgentService_RestartSystemdService_FullMethodName   = "/switchagent.v1.SwitchAgentService/RestartSystemdService"
+	SwitchAgentService_GetAgentVersion_FullMethodName         = "/switchagent.v1.SwitchAgentService/GetAgentVersion"
 )
 
 // SwitchAgentServiceClient is the client API for SwitchAgentService service.
@@ -51,6 +52,7 @@ type SwitchAgentServiceClient interface {
 	Reboot(ctx context.Context, in *RebootRequest, opts ...grpc.CallOption) (*RebootResponse, error)
 	OnieBootModeInstall(ctx context.Context, in *OnieBootModeInstallRequest, opts ...grpc.CallOption) (*OnieBootModeInstallResponse, error)
 	RestartSystemdService(ctx context.Context, in *RestartSystemdServiceRequest, opts ...grpc.CallOption) (*RestartSystemdServiceResponse, error)
+	GetAgentVersion(ctx context.Context, in *GetAgentVersionRequest, opts ...grpc.CallOption) (*GetAgentVersionResponse, error)
 }
 
 type switchAgentServiceClient struct {
@@ -171,6 +173,16 @@ func (c *switchAgentServiceClient) RestartSystemdService(ctx context.Context, in
 	return out, nil
 }
 
+func (c *switchAgentServiceClient) GetAgentVersion(ctx context.Context, in *GetAgentVersionRequest, opts ...grpc.CallOption) (*GetAgentVersionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetAgentVersionResponse)
+	err := c.cc.Invoke(ctx, SwitchAgentService_GetAgentVersion_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SwitchAgentServiceServer is the server API for SwitchAgentService service.
 // All implementations must embed UnimplementedSwitchAgentServiceServer
 // for forward compatibility.
@@ -189,6 +201,7 @@ type SwitchAgentServiceServer interface {
 	Reboot(context.Context, *RebootRequest) (*RebootResponse, error)
 	OnieBootModeInstall(context.Context, *OnieBootModeInstallRequest) (*OnieBootModeInstallResponse, error)
 	RestartSystemdService(context.Context, *RestartSystemdServiceRequest) (*RestartSystemdServiceResponse, error)
+	GetAgentVersion(context.Context, *GetAgentVersionRequest) (*GetAgentVersionResponse, error)
 	mustEmbedUnimplementedSwitchAgentServiceServer()
 }
 
@@ -231,6 +244,9 @@ func (UnimplementedSwitchAgentServiceServer) OnieBootModeInstall(context.Context
 }
 func (UnimplementedSwitchAgentServiceServer) RestartSystemdService(context.Context, *RestartSystemdServiceRequest) (*RestartSystemdServiceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RestartSystemdService not implemented")
+}
+func (UnimplementedSwitchAgentServiceServer) GetAgentVersion(context.Context, *GetAgentVersionRequest) (*GetAgentVersionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetAgentVersion not implemented")
 }
 func (UnimplementedSwitchAgentServiceServer) mustEmbedUnimplementedSwitchAgentServiceServer() {}
 func (UnimplementedSwitchAgentServiceServer) testEmbeddedByValue()                            {}
@@ -451,6 +467,24 @@ func _SwitchAgentService_RestartSystemdService_Handler(srv interface{}, ctx cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SwitchAgentService_GetAgentVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAgentVersionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SwitchAgentServiceServer).GetAgentVersion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SwitchAgentService_GetAgentVersion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SwitchAgentServiceServer).GetAgentVersion(ctx, req.(*GetAgentVersionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SwitchAgentService_ServiceDesc is the grpc.ServiceDesc for SwitchAgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -501,6 +535,10 @@ var SwitchAgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RestartSystemdService",
 			Handler:    _SwitchAgentService_RestartSystemdService_Handler,
+		},
+		{
+			MethodName: "GetAgentVersion",
+			Handler:    _SwitchAgentService_GetAgentVersion_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

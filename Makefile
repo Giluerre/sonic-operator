@@ -1,6 +1,11 @@
 # Image URL to use all building/pushing image targets
 IMG ?= controller:latest
 
+# Build version info injected into binaries via ldflags
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+AGENT_LDFLAGS := -X main.version=$(GIT_COMMIT) -X main.buildTime=$(BUILD_TIME)
+
 # Docker image name for the VitePress based local development setup
 DOCS_IMAGE ?= ironcore-dev/sonic-operator-docs
 DOCS_PORT ?= 5173
@@ -160,8 +165,8 @@ docs: crd-ref-docs ## Generate API reference documentation.
 
 .PHONY: build-agent
 build-agent: fmt vet ## Build agent binary.
-	go build -o bin/agent_server cmd/agent/main.go
-	go build -o bin/agent_cli cmd/agent_cli/main.go
+	go build -ldflags "$(AGENT_LDFLAGS)" -o bin/agent_server cmd/agent/main.go
+	go build -ldflags "$(AGENT_LDFLAGS)" -o bin/agent_cli    cmd/agent_cli/main.go
 
 .PHONY: provisioning-server
 provisioning-server: fmt vet ## Build provisioning-server binary.

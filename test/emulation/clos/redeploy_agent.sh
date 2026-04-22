@@ -18,9 +18,10 @@ PROJECT_ROOT=$(git rev-parse --show-toplevel)
 echo "Building image ${IMAGE_SPEC} from project root ${PROJECT_ROOT}..."
 docker build -f "${PROJECT_ROOT}/Dockerfile" \
   --target sonic-agent \
+  --build-arg GIT_COMMIT="$(git rev-parse --short HEAD)" \
+  --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   -t "${IMAGE_SPEC}" \
   "${PROJECT_ROOT}"
-
 echo "Saving image to temporary archive ${IMAGE_ARCHIVE}..."
 docker save "${IMAGE_SPEC}" -o "${IMAGE_ARCHIVE}"
 

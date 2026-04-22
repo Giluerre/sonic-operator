@@ -23,6 +23,10 @@ import (
 var (
 	port      = flag.Int("port", 50051, "The server port")
 	redisAddr = flag.String("redis-addr", "127.0.0.1:6379", "The Redis address")
+
+	// AgentVersion and AgentBuildTime are set by cmd/agent/main.go before StartServer().
+	AgentVersion   = "dev"
+	AgentBuildTime = "unknown"
 )
 
 type proxyServer struct {
@@ -339,6 +343,15 @@ func (s *proxyServer) RestartSystemdService(ctx context.Context, request *pb.Res
 			Code:    0,
 			Message: "Success",
 		},
+	}, nil
+}
+
+func (s *proxyServer) GetAgentVersion(ctx context.Context, request *pb.GetAgentVersionRequest) (*pb.GetAgentVersionResponse, error) {
+	log.Printf("GetAgentVersion called")
+	return &pb.GetAgentVersionResponse{
+		Status:    &pb.Status{Code: 0, Message: "Success"},
+		Version:   AgentVersion,
+		BuildTime: AgentBuildTime,
 	}, nil
 }
 

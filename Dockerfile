@@ -36,10 +36,12 @@ ENTRYPOINT ["/manager"]
 
 # State 1: Build agent binaries
 FROM builder AS agent-builder
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIME=unknown
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg \
-    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o switch-agent-server cmd/agent/main.go && \
-    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o switch-agent-client cmd/agent_cli/main.go
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags "-X main.version=${GIT_COMMIT} -X main.buildTime=${BUILD_TIME}" -a -o switch-agent-server cmd/agent/main.go && \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags "-X main.version=${GIT_COMMIT} -X main.buildTime=${BUILD_TIME}" -a -o switch-agent-client cmd/agent_cli/main.go
 
 # Stage 2: Final image based on SONiC VS (Arm only right now)
 FROM gcr.io/distroless/static:nonroot AS sonic-agent

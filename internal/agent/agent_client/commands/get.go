@@ -23,6 +23,7 @@ func Get() *cobra.Command {
 		GetDeviceInfo(printRenderer),
 		GetInterface(printRenderer),
 		GetInterfaceNeighbor(printRenderer),
+		GetAgentVersion(),
 	}
 
 	cmd.AddCommand(subcommands...)

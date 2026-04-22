@@ -31,6 +31,8 @@ type SwitchAgentClient interface {
 	Reboot(ctx context.Context) error
 	OnieBootModeInstall(ctx context.Context) error
 	RestartSystemdService(ctx context.Context, serviceName string) error
+
+	GetAgentVersion(ctx context.Context) (version string, buildTime string, err error)
 }
 
 type defaultSwitchAgentClient struct {
@@ -415,4 +417,25 @@ func (c *defaultSwitchAgentClient) RestartSystemdService(ctx context.Context, se
 	}
 
 	return nil
+}
+
+func (c *defaultSwitchAgentClient) GetAgentVersion(ctx context.Context) (string, string, error) {
+	cleanup, err := c.dial()
+	if err != nil {
+		return "", "", err
+	}
+	defer func() {
+		_ = cleanup()
+	}()
+
+	resp, err := c.client.GetAgentVersion(ctx, &pb.GetAgentVersionRequest{})
+	if err != nil {
+		return "", "", err
+	}
+
+	if resp.GetStatus().Code != 0 {
+		return "", "", fmt.Errorf("failed to get agent version: %s", resp.GetStatus().GetMessage())
+	}
+
+	return resp.GetVersion(), resp.GetBuildTime(), nil
 }
