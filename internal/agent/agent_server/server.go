@@ -5,10 +5,19 @@ package agent_server
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"log"
+	"math/big"
 	"net"
+	"time"
 
 	pb "github.com/ironcore-dev/sonic-operator/internal/agent/proto"
 	agent "github.com/ironcore-dev/sonic-operator/internal/agent/types"
@@ -17,12 +26,16 @@ import (
 	"github.com/ironcore-dev/sonic-operator/internal/agent/sonic"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"
 )
 
 var (
-	port      = flag.Int("port", 50051, "The server port")
-	redisAddr = flag.String("redis-addr", "127.0.0.1:6379", "The Redis address")
+	port        = flag.Int("port", 50051, "The server port")
+	redisAddr   = flag.String("redis-addr", "127.0.0.1:6379", "The Redis address")
+	tlsCertFile = flag.String("tls-cert-file", "", "Path to PEM server certificate (optional, auto-generated if omitted).")
+	tlsKeyFile  = flag.String("tls-key-file", "", "Path to PEM private key (optional, auto-generated if omitted).")
+	enablePlain = flag.Bool("enable-plain-mode", false, "Disable TLS and run in plaintext mode.")
 )
 
 type proxyServer struct {
@@ -266,7 +279,7 @@ func (s *proxyServer) SaveConfig(ctx context.Context, request *pb.SaveConfigRequ
 		return &pb.SaveConfigResponse{
 			Status: &pb.Status{
 				Code:    status.Code,
-				Message: fmt.Sprintf("failed to save config: %v", status.Message),
+				Message: status.Message,
 			},
 		}, nil
 	}
@@ -279,10 +292,190 @@ func (s *proxyServer) SaveConfig(ctx context.Context, request *pb.SaveConfigRequ
 	}, nil
 }
 
+func (s *proxyServer) Reboot(ctx context.Context, request *pb.RebootRequest) (*pb.RebootResponse, error) {
+	log.Printf("Reboot called")
+
+	status := s.SwitchAgent.Reboot(ctx)
+	if status != nil {
+		return &pb.RebootResponse{
+			Status: &pb.Status{
+				Code:    status.Code,
+				Message: status.Message,
+			},
+		}, nil
+	}
+
+	return &pb.RebootResponse{
+		Status: &pb.Status{
+			Code:    0,
+			Message: "Success",
+		},
+	}, nil
+}
+
+func (s *proxyServer) OnieBootModeInstall(ctx context.Context, request *pb.OnieBootModeInstallRequest) (*pb.OnieBootModeInstallResponse, error) {
+	log.Printf("OnieBootModeInstall called")
+
+	status := s.SwitchAgent.OnieBootModeInstall(ctx)
+	if status != nil {
+		return &pb.OnieBootModeInstallResponse{
+			Status: &pb.Status{
+				Code:    status.Code,
+				Message: status.Message,
+			},
+		}, nil
+	}
+
+	return &pb.OnieBootModeInstallResponse{
+		Status: &pb.Status{
+			Code:    0,
+			Message: "Success",
+		},
+	}, nil
+}
+
+func (s *proxyServer) RestartSystemdService(ctx context.Context, request *pb.RestartSystemdServiceRequest) (*pb.RestartSystemdServiceResponse, error) {
+	log.Printf("RestartSystemdService called: service=%s", request.GetServiceName())
+
+	status := s.SwitchAgent.RestartSystemdService(ctx, request.GetServiceName())
+	if status != nil {
+		return &pb.RestartSystemdServiceResponse{
+			Status: &pb.Status{
+				Code:    status.Code,
+				Message: status.Message,
+			},
+		}, nil
+	}
+
+	return &pb.RestartSystemdServiceResponse{
+		Status: &pb.Status{
+			Code:    0,
+			Message: "Success",
+		},
+	}, nil
+}
+
+func (s *proxyServer) RebootCause(ctx context.Context, _ *pb.RebootCauseRequest) (*pb.RebootCauseResponse, error) {
+	log.Printf("RebootCause called")
+
+	cause, status := s.SwitchAgent.RebootCause(ctx)
+	if status != nil {
+		return &pb.RebootCauseResponse{
+			Status: &pb.Status{
+				Code:    status.Code,
+				Message: status.Message,
+			},
+		}, nil
+	}
+
+	return &pb.RebootCauseResponse{
+		Status: &pb.Status{
+			Code:    0,
+			Message: "Success",
+		},
+		Cause: cause,
+	}, nil
+}
+
+func (s *proxyServer) FactoryReset(ctx context.Context, _ *pb.FactoryResetRequest) (*pb.FactoryResetResponse, error) {
+	log.Printf("FactoryReset called")
+
+	status := s.SwitchAgent.FactoryReset(ctx)
+	if status != nil {
+		return &pb.FactoryResetResponse{
+			Status: &pb.Status{
+				Code:    status.Code,
+				Message: status.Message,
+			},
+		}, nil
+	}
+
+	return &pb.FactoryResetResponse{
+		Status: &pb.Status{
+			Code:    0,
+			Message: "Success",
+		},
+	}, nil
+}
+
+func (s *proxyServer) GetReadiness(ctx context.Context, _ *pb.GetReadinessRequest) (*pb.GetReadinessResponse, error) {
+	log.Printf("GetReadiness called")
+
+	ready, status := s.SwitchAgent.GetReadiness(ctx)
+	if status != nil {
+		return &pb.GetReadinessResponse{
+			Status: &pb.Status{Code: status.Code, Message: status.Message},
+		}, nil
+	}
+
+	return &pb.GetReadinessResponse{Ready: ready}, nil
+}
+
 // NewProxyServer creates a proxyServer backed by the given SwitchAgent.
 // This is exported so tests can instantiate a server with a fake agent.
 func NewProxyServer(switchAgentImpl switchAgent.SwitchAgent) pb.SwitchAgentServiceServer {
 	return &proxyServer{SwitchAgent: switchAgentImpl}
+}
+
+func generateSelfSignedCert() (tls.Certificate, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("generate key: %w", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "sonic-agent"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("create certificate: %w", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("marshal key: %w", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	return tls.X509KeyPair(certPEM, keyPEM)
+}
+
+func buildServerOptions(certFile, keyFile string, plainMode bool) ([]grpc.ServerOption, error) {
+	if plainMode {
+		if certFile != "" || keyFile != "" {
+			return nil, fmt.Errorf("--enable-plain-mode conflicts with --tls-cert-file / --tls-key-file")
+		}
+		return nil, nil
+	}
+
+	var (
+		cert tls.Certificate
+		err  error
+	)
+	if certFile == "" && keyFile == "" {
+		log.Printf("No TLS cert/key provided; generating self-signed certificate")
+		cert, err = generateSelfSignedCert()
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate self-signed cert: %w", err)
+		}
+	} else if certFile != "" && keyFile != "" {
+		cert, err = tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load TLS key pair: %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("both --tls-cert-file and --tls-key-file must be set together (got cert=%q, key=%q)", certFile, keyFile)
+	}
+
+	tlsCfg := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ClientAuth:   tls.NoClientCert,
+		MinVersion:   tls.VersionTLS12,
+	}
+	return []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}, nil
 }
 
 func StartServer() {
@@ -293,15 +486,31 @@ func StartServer() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	s := grpc.NewServer()
+	serverOpts, err := buildServerOptions(*tlsCertFile, *tlsKeyFile, *enablePlain)
+	if err != nil {
+		log.Fatalf("invalid server configuration: %v", err)
+	}
+	var s *grpc.Server
+	if serverOpts != nil {
+		s = grpc.NewServer(serverOpts...)
+		log.Printf("gRPC server starting with TLS")
+	} else {
+		s = grpc.NewServer()
+		log.Printf("gRPC server starting in plaintext mode")
+	}
 
 	swAgent, err := sonic.NewSonicRedisAgent(*redisAddr)
 	if err != nil {
 		log.Fatalf("failed to create SonicRedisAgent: %v", err)
-		panic(err)
 	}
 
 	pb.RegisterSwitchAgentServiceServer(s, NewProxyServer(swAgent))
+	pb.RegisterDeviceProviderServiceServer(s, NewDeviceProviderServer(swAgent))
+	pb.RegisterInterfaceProviderServiceServer(s, NewInterfaceProviderServer(swAgent))
+	pb.RegisterDHCPRelayProviderServiceServer(s, NewDHCPRelayProviderServer(swAgent))
+	pb.RegisterVLANProviderServiceServer(s, NewVLANProviderServer(swAgent))
+	pb.RegisterLLDPProviderServiceServer(s, NewLLDPProviderServer(swAgent))
+	pb.RegisterWireSonicSwitchServiceServer(s, NewWireSonicSwitchServer(swAgent))
 
 	// Register reflection service on gRPC server for debugging
 	reflection.Register(s)

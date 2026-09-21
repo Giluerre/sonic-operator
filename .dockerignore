@@ -12,3 +12,8 @@
 
 # Re-include template files for go:embed
 !**/*.gotmpl
+!**/*.tmpl
+
+# Re-include embedded host-service module files
+!internal/agent/sonic/hostservices/modules/**/*.yaml
+!internal/agent/sonic/hostservices/modules/**/*.py

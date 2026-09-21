@@ -19,10 +19,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	networkingv1alpha1 "github.com/ironcore-dev/sonic-operator/api/v1alpha1"
 	v1alpha1ac "github.com/ironcore-dev/sonic-operator/api/v1alpha1/applyconfiguration/api/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
@@ -168,6 +170,28 @@ func (r *SwitchReconciler) EnsureInterface(ctx context.Context, log logr.Logger,
 			WithSwitchRef(corev1.LocalObjectReference{Name: s.Name}).
 			WithAdminState(adminState),
 		)
+	i := &networkingv1alpha1.SwitchInterface{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: networkingv1alpha1.GroupVersion.String(),
+			Kind:       "SwitchInterface",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: strings.ToLower(fmt.Sprintf("%s-%s", s.Name, iface.Name)),
+		},
+		Spec: networkingv1alpha1.SwitchInterfaceSpec{
+			Handle:     iface.Name,
+			NativeName: iface.NativeName,
+
+			SwitchRef: &corev1.LocalObjectReference{
+				Name: s.Name,
+			},
+			AdminState: adminState,
+		},
+	}
+
+	if err := controllerutil.SetOwnerReference(s, i, r.Scheme); err != nil {
+		return err
+	}
 
 	if err := r.Apply(ctx, ac, client.ForceOwnership, fieldOwner); err != nil {
 		return err

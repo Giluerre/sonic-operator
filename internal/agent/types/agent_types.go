@@ -194,6 +194,125 @@ func (l *PortList) GetStatus() Status {
 	return l.Status
 }
 
+type PortDetails struct {
+	TypeMeta            `json:",inline"`
+	ID                  string  `json:"id"`
+	Type                string  `json:"type"`
+	SupportedSpeedsGbps []int32 `json:"supported_speeds_gbps,omitempty"`
+	Transceiver         string  `json:"transceiver,omitempty"`
+	Status              Status  `json:"status"`
+}
+
+type PortDetailsList struct {
+	TypeMeta `json:",inline"`
+	Items    []PortDetails `json:"items"`
+	Status   Status        `json:"status"`
+}
+
+type EnsureInterfaceRequest struct {
+	InterfaceName  string
+	AdminStatus    DeviceStatus
+	Description    string
+	Type           string
+	MTU            int32
+	IPv4Prefixes   []string
+	VRFName        string
+	SwitchportMode string // "access" | "trunk" | "" (routed)
+	AccessVlan     int32
+	NativeVlan     int32
+	AllowedVlans   []int32
+}
+
+type InterfaceStatus struct {
+	AdminStatus bool
+	OperStatus  bool
+	OperMessage string
+}
+
+type DHCPRelayRequest struct {
+	InterfaceNames  []string
+	ServerAddresses []string
+	VRFName         string
+}
+
+type DHCPRelayStatus struct {
+	ConfiguredInterfaces []string
+}
+
+type VLANRequest struct {
+	VlanID     int32
+	Name       string
+	AdminState string
+}
+
+type VLANStatus struct {
+	OperStatus bool
+}
+
+type LLDPInterfaceConfig struct {
+	InterfaceName string
+	AdminState    string
+}
+
+type LLDPRequest struct {
+	AdminState string
+	Interfaces []LLDPInterfaceConfig
+}
+
+type LLDPStatus struct {
+	OperStatus bool
+}
+
+type SwitchConfigMetadata struct {
+	Namespace string
+	Name      string
+	UID       string
+}
+
+type WireVLANMember struct {
+	InterfaceID string
+	MTU         int32  // 0 = unset
+	FEC         string // "", "rs", "fc", or "none"
+	Speed       int32  // Mbps; 0 = unset
+}
+
+type WireVLAN struct {
+	ID        int32
+	Prefix    string
+	DHCPRelay string
+	Members   []WireVLANMember
+}
+
+type WireBGPNeighbor struct {
+	VlanID      int32
+	InterfaceID string
+}
+
+type WireBGPPeerGroup struct {
+	Name      string
+	Neighbors []WireBGPNeighbor
+}
+
+type WireBGPConfig struct {
+	ASN        uint32
+	RouterID   string
+	PeerGroups []WireBGPPeerGroup
+}
+
+type WireSwitchConfig struct {
+	Metadata    SwitchConfigMetadata
+	Hostname    string
+	LoopbackIPs []string
+	Prefixes    []string
+	VLANs       []WireVLAN
+	BGP         *WireBGPConfig
+}
+
+type ApplySwitchRequest struct {
+	Device string
+	Config WireSwitchConfig
+}
+
 var (
 	DeviceKind            = reflect.TypeOf(SwitchDevice{}).Name()
 	InterfaceKind         = reflect.TypeOf(Interface{}).Name()
