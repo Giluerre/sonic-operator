@@ -95,7 +95,7 @@ class Extension(host_service.HostModule):
             ['bash', '-c',
              "jq '.DEVICE_METADATA.localhost += {\"docker_routing_config_mode\": \"split-unified\"}"
              " | .DEVICE_METADATA.localhost.type = \"ToRRouter\""
-             " | . += {\"MGMT_VRF_CONFIG\": {\"vrf_global\": {\"mgmtVrfEnabled\": \"true\"}}}'"
+             " | del(.MGMT_VRF_CONFIG)'"
              " /etc/sonic/config_db.json > /tmp/config_db.json && sudo mv /tmp/config_db.json /etc/sonic/config_db.json"],
             ['sudo', 'config', 'reload', '/etc/sonic/config_db.json', '-y','-f'],
         ]
