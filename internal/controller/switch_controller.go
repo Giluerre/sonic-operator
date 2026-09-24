@@ -154,7 +154,7 @@ func (r *SwitchReconciler) EnsureInterface(ctx context.Context, log logr.Logger,
 
 	isController := true
 	blockOwnerDeletion := true
-	ac := v1alpha1ac.SwitchInterface(strings.ToLower(fmt.Sprintf("%s-%s", s.Name, iface.Name))).
+	ac := v1alpha1ac.SwitchInterface(strings.ToLower(fmt.Sprintf("%s-%s", s.Name, iface.NativeName))).
 		WithOwnerReferences(
 			metav1ac.OwnerReference().
 				WithAPIVersion(networkingv1alpha1.GroupVersion.String()).
@@ -165,7 +165,7 @@ func (r *SwitchReconciler) EnsureInterface(ctx context.Context, log logr.Logger,
 				WithBlockOwnerDeletion(blockOwnerDeletion),
 		).
 		WithSpec(v1alpha1ac.SwitchInterfaceSpec().
-			WithHandle(iface.Name).
+			WithHandle(iface.NativeName).
 			WithNativeName(iface.NativeName).
 			WithSwitchRef(corev1.LocalObjectReference{Name: s.Name}).
 			WithAdminState(adminState),
@@ -176,10 +176,10 @@ func (r *SwitchReconciler) EnsureInterface(ctx context.Context, log logr.Logger,
 			Kind:       "SwitchInterface",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name: strings.ToLower(fmt.Sprintf("%s-%s", s.Name, iface.Name)),
+			Name: strings.ToLower(fmt.Sprintf("%s-%s", s.Name, iface.NativeName)),
 		},
 		Spec: networkingv1alpha1.SwitchInterfaceSpec{
-			Handle:     iface.Name,
+			Handle:     iface.NativeName,
 			NativeName: iface.NativeName,
 
 			SwitchRef: &corev1.LocalObjectReference{

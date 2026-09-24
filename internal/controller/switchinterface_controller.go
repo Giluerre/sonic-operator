@@ -96,7 +96,7 @@ func (r *SwitchInterfaceReconciler) reconcile(ctx context.Context, log logr.Logg
 		TypeMeta: agent.TypeMeta{
 			Kind: agent.InterfaceKind,
 		},
-		Name: i.Spec.Handle,
+		NativeName: i.Spec.Handle,
 	})
 	if err != nil {
 		i.Status.State = networkingv1alpha1.SwitchInterfaceStateFailed
@@ -110,8 +110,8 @@ func (r *SwitchInterfaceReconciler) reconcile(ctx context.Context, log logr.Logg
 				TypeMeta: agent.TypeMeta{
 					Kind: agent.InterfaceKind,
 				},
-				Name:      iface.Name,
-				AliasName: i.Spec.Handle,
+				NativeName: iface.NativeName,
+				AliasName:  i.Spec.Handle,
 			}); err != nil {
 				i.Status.State = networkingv1alpha1.SwitchInterfaceStateFailed
 				return ctrl.Result{}, err
@@ -147,7 +147,7 @@ func (r *SwitchInterfaceReconciler) reconcile(ctx context.Context, log logr.Logg
 		TypeMeta: agent.TypeMeta{
 			Kind: agent.InterfaceKind,
 		},
-		Name:        i.Spec.NativeName,
+		NativeName:  i.Spec.NativeName,
 		AdminStatus: desired_state,
 	}); err != nil {
 		i.Status.State = networkingv1alpha1.SwitchInterfaceStateFailed
@@ -181,7 +181,7 @@ func (r *SwitchInterfaceReconciler) reconcile(ctx context.Context, log logr.Logg
 		TypeMeta: agent.TypeMeta{
 			Kind: agent.InterfaceKind,
 		},
-		Name: i.Spec.NativeName,
+		NativeName: i.Spec.NativeName,
 	})
 	if err != nil {
 		if neighbor == nil || neighbor.Status.Code != agenterrors.NOT_FOUND {

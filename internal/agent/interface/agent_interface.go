@@ -34,21 +34,7 @@ type SwitchAgent interface {
 	GetReadiness(ctx context.Context) (bool, *agent.Status)
 
 	GetLastRebootTime(ctx context.Context) (time.Time, *agent.Status)
-	EnsureInterface(ctx context.Context, req *agent.EnsureInterfaceRequest) *agent.Status
-	DeleteInterface(ctx context.Context, interfaceName string) *agent.Status
 	GetInterfaceStatus(ctx context.Context, interfaceName string) (*agent.InterfaceStatus, *agent.Status)
-
-	EnsureDHCPRelay(ctx context.Context, req *agent.DHCPRelayRequest) *agent.Status
-	DeleteDHCPRelay(ctx context.Context, interfaceNames []string) *agent.Status
-	GetDHCPRelayStatus(ctx context.Context, interfaceNames []string) (*agent.DHCPRelayStatus, *agent.Status)
-
-	EnsureVLAN(ctx context.Context, req *agent.VLANRequest) *agent.Status
-	DeleteVLAN(ctx context.Context, vlanID int32) *agent.Status
-	GetVLANStatus(ctx context.Context, vlanID int32) (*agent.VLANStatus, *agent.Status)
-
-	EnsureLLDP(ctx context.Context, req *agent.LLDPRequest) *agent.Status
-	DeleteLLDP(ctx context.Context) *agent.Status
-	GetLLDPStatus(ctx context.Context) (*agent.LLDPStatus, *agent.Status)
 
 	ApplySwitch(ctx context.Context, req *agent.ApplySwitchRequest) *agent.Status
 	DeleteSwitch(ctx context.Context, device string) *agent.Status

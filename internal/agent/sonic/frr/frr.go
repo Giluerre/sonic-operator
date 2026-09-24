@@ -41,7 +41,7 @@ type frrConfigData struct {
 //   - No NORTH group → spine: router-id 2.0.x.x, all groups are pass-through
 //
 // VLAN interface stanzas are emitted for every unique non-zero VlanID.
-func GenerateFRRConfig(cfg *agent.WireBGPConfig, hostname string, prefixes []string) (string, error) {
+func GenerateFRRConfig(cfg *agent.FabricBGPConfig, hostname string, prefixes []string) (string, error) {
 	if cfg == nil {
 		return "", fmt.Errorf("BGP config is nil")
 	}

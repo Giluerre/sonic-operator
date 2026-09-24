@@ -14,8 +14,8 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
-	pb "github.com/ironcore-dev/sonic-operator/internal/agent/proto"
 	agent "github.com/ironcore-dev/sonic-operator/internal/agent/types"
+	pb "github.com/ironcore-dev/sonic-operator/pkg/agent/proto"
 )
 
 type SwitchAgentClient interface {
@@ -37,7 +37,6 @@ type SwitchAgentClient interface {
 	RebootCause(ctx context.Context) (string, error)
 	FactoryReset(ctx context.Context) error
 	GetReadiness(ctx context.Context) (bool, error)
-
 	Reprovision(ctx context.Context) error
 
 	ApplySwitch(ctx context.Context, device string, cfg *pb.SwitchConfig) error
@@ -109,22 +108,13 @@ func (c *defaultSwitchAgentClient) dialConn() (*grpc.ClientConn, error) {
 	return conn, nil
 }
 
-func (c *defaultSwitchAgentClient) dialWire() (pb.WireSonicSwitchServiceClient, func() error, error) {
+func (c *defaultSwitchAgentClient) dialFabricSonic() (pb.FabricSonicServiceClient, func() error, error) {
 	log.Printf("connecting to %s", c.Address)
 	conn, err := c.dialConn()
 	if err != nil {
 		return nil, nil, err
 	}
-	return pb.NewWireSonicSwitchServiceClient(conn), conn.Close, nil
-}
-
-func (c *defaultSwitchAgentClient) dialDeviceProvider() (pb.DeviceProviderServiceClient, func() error, error) {
-	log.Printf("connecting to %s", c.Address)
-	conn, err := c.dialConn()
-	if err != nil {
-		return nil, nil, err
-	}
-	return pb.NewDeviceProviderServiceClient(conn), conn.Close, nil
+	return pb.NewFabricSonicServiceClient(conn), conn.Close, nil
 }
 
 func (c *defaultSwitchAgentClient) GetDeviceInfo(ctx context.Context) (*agent.SwitchDevice, error) {
@@ -176,8 +166,7 @@ func (c *defaultSwitchAgentClient) ListInterfaces(ctx context.Context) (*agent.I
 			TypeMeta: agent.TypeMeta{
 				Kind: agent.InterfaceKind,
 			},
-			Name:            iface.GetName(),
-			NativeName:      iface.GetNativeName(),
+			NativeName:      iface.GetName(),
 			AliasName:       iface.GetAliasName(),
 			MacAddress:      iface.GetMacAddress(),
 			OperationStatus: agent.DeviceStatus(iface.GetOperationalStatus()),
@@ -218,9 +207,8 @@ func (c *defaultSwitchAgentClient) SetInterfaceAdminStatus(ctx context.Context, 
 			Status: agent.ProtoStatusToStatus(resp.GetStatus()),
 		}, fmt.Errorf("failed to set interface admin status: %s", resp.GetStatus().GetMessage())
 	}
-	iface.Name = resp.GetInterface().GetName()
+	iface.NativeName = resp.GetInterface().GetName()
 	iface.AliasName = resp.GetInterface().GetAliasName()
-	iface.NativeName = resp.GetInterface().GetNativeName()
 	iface.MacAddress = resp.GetInterface().GetMacAddress()
 	iface.AdminStatus = agent.DeviceStatus(resp.GetInterface().GetAdminStatus())
 	iface.OperationStatus = agent.DeviceStatus(resp.GetInterface().GetOperationalStatus())
@@ -238,13 +226,8 @@ func (c *defaultSwitchAgentClient) GetInterfaceByAbstractName(ctx context.Contex
 		_ = cleanup()
 	}()
 
-	nativeName, err := agent.AbstractNameToNativeName(iface.GetName())
-	if err != nil {
-		return nil, err
-	}
-
 	resp, err := grpcClient.GetInterface(ctx, &pb.GetInterfaceRequest{
-		InterfaceName: nativeName,
+		InterfaceName: iface.GetName(),
 	})
 	if err != nil {
 		return nil, err
@@ -260,9 +243,8 @@ func (c *defaultSwitchAgentClient) GetInterfaceByAbstractName(ctx context.Contex
 		TypeMeta: agent.TypeMeta{
 			Kind: agent.InterfaceKind,
 		},
-		Name:            resp.GetInterface().Name,
-		AliasName:       resp.GetInterface().AliasName,
-		NativeName:      resp.GetInterface().NativeName,
+		NativeName:      resp.GetInterface().GetName(),
+		AliasName:       resp.GetInterface().GetAliasName(),
 		MacAddress:      resp.GetInterface().GetMacAddress(),
 		OperationStatus: agent.DeviceStatus(resp.GetInterface().GetOperationalStatus()),
 		AdminStatus:     agent.DeviceStatus(resp.GetInterface().GetAdminStatus()),
@@ -519,28 +501,8 @@ func (c *defaultSwitchAgentClient) GetReadiness(ctx context.Context) (bool, erro
 	return resp.GetReady(), nil
 }
 
-func (c *defaultSwitchAgentClient) ApplySwitch(ctx context.Context, device string, cfg *pb.SwitchConfig) error {
-	wireClient, cleanup, err := c.dialWire()
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = cleanup()
-	}()
-
-	resp, err := wireClient.ApplySwitch(ctx, &pb.ApplySwitchRequest{
-		Device: device,
-		Config: cfg,
-	})
-	if err != nil {
-		return fmt.Errorf("ApplySwitch RPC failed: %w", err)
-	}
-	_ = resp
-	return nil
-}
-
 func (c *defaultSwitchAgentClient) Reprovision(ctx context.Context) error {
-	dpClient, cleanup, err := c.dialDeviceProvider()
+	grpcClient, cleanup, err := c.dial()
 	if err != nil {
 		return err
 	}
@@ -548,7 +510,7 @@ func (c *defaultSwitchAgentClient) Reprovision(ctx context.Context) error {
 		_ = cleanup()
 	}()
 
-	resp, err := dpClient.Reprovision(ctx, &pb.DeviceProviderReprovisionRequest{})
+	resp, err := grpcClient.Reprovision(ctx, &pb.ReprovisionRequest{})
 	if err != nil {
 		return err
 	}
@@ -560,8 +522,28 @@ func (c *defaultSwitchAgentClient) Reprovision(ctx context.Context) error {
 	return nil
 }
 
+func (c *defaultSwitchAgentClient) ApplySwitch(ctx context.Context, device string, cfg *pb.SwitchConfig) error {
+	fabricClient, cleanup, err := c.dialFabricSonic()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = cleanup()
+	}()
+
+	resp, err := fabricClient.ApplySwitch(ctx, &pb.ApplySwitchRequest{
+		Device: device,
+		Config: cfg,
+	})
+	if err != nil {
+		return fmt.Errorf("ApplySwitch RPC failed: %w", err)
+	}
+	_ = resp
+	return nil
+}
+
 func (c *defaultSwitchAgentClient) DeleteSwitch(ctx context.Context, device string) (string, error) {
-	wireClient, cleanup, err := c.dialWire()
+	fabricClient, cleanup, err := c.dialFabricSonic()
 	if err != nil {
 		return "", err
 	}
@@ -569,7 +551,7 @@ func (c *defaultSwitchAgentClient) DeleteSwitch(ctx context.Context, device stri
 		_ = cleanup()
 	}()
 
-	resp, err := wireClient.DeleteSwitch(ctx, &pb.DeleteSwitchRequest{Device: device})
+	resp, err := fabricClient.DeleteSwitch(ctx, &pb.DeleteSwitchRequest{Device: device})
 	if err != nil {
 		return "", fmt.Errorf("DeleteSwitch RPC failed: %w", err)
 	}

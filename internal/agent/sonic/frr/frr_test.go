@@ -18,20 +18,20 @@ func TestFRR(t *testing.T) {
 	ginkgo.RunSpecs(t, "FRR Suite")
 }
 
-func leafBGPConfig() *agent.WireBGPConfig {
-	return &agent.WireBGPConfig{
+func leafBGPConfig() *agent.FabricBGPConfig {
+	return &agent.FabricBGPConfig{
 		ASN: 100,
-		PeerGroups: []agent.WireBGPPeerGroup{
+		PeerGroups: []agent.FabricBGPPeerGroup{
 			{
 				Name: "NORTH",
-				Neighbors: []agent.WireBGPNeighbor{
+				Neighbors: []agent.FabricBGPNeighbor{
 					{InterfaceID: "Ethernet120"},
 					{InterfaceID: "Ethernet124"},
 				},
 			},
 			{
 				Name: "SOUTH",
-				Neighbors: []agent.WireBGPNeighbor{
+				Neighbors: []agent.FabricBGPNeighbor{
 					{InterfaceID: "Vlan1001", VlanID: 1001},
 					{InterfaceID: "Vlan1002", VlanID: 1002},
 				},
@@ -82,7 +82,7 @@ var _ = ginkgo.Describe("GenerateFRRConfig", func() {
 
 	ginkgo.It("derives router-id correctly for ASN > 255", func() {
 		// 300/256=1, 300%256=44 → 1.0.1.44
-		cfg := &agent.WireBGPConfig{ASN: 300, PeerGroups: []agent.WireBGPPeerGroup{{Name: "NORTH"}}}
+		cfg := &agent.FabricBGPConfig{ASN: 300, PeerGroups: []agent.FabricBGPPeerGroup{{Name: "NORTH"}}}
 		out, err := frr.GenerateFRRConfig(cfg, "leaf-2", nil)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		gomega.Expect(out).To(gomega.ContainSubstring("bgp router-id 1.0.1.44"))
@@ -90,7 +90,7 @@ var _ = ginkgo.Describe("GenerateFRRConfig", func() {
 
 	ginkgo.It("derives router-id correctly for ASN=256", func() {
 		// 256/256=1, 256%256=0 → 1.0.1.0
-		cfg := &agent.WireBGPConfig{ASN: 256, PeerGroups: []agent.WireBGPPeerGroup{{Name: "NORTH"}}}
+		cfg := &agent.FabricBGPConfig{ASN: 256, PeerGroups: []agent.FabricBGPPeerGroup{{Name: "NORTH"}}}
 		out, err := frr.GenerateFRRConfig(cfg, "leaf-3", nil)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		gomega.Expect(out).To(gomega.ContainSubstring("bgp router-id 1.0.1.0"))
@@ -140,10 +140,10 @@ var _ = ginkgo.Describe("GenerateFRRConfig", func() {
 	})
 
 	ginkgo.It("is case-insensitive for peer group name matching", func() {
-		cfg := &agent.WireBGPConfig{
+		cfg := &agent.FabricBGPConfig{
 			ASN: 100,
-			PeerGroups: []agent.WireBGPPeerGroup{
-				{Name: "north", Neighbors: []agent.WireBGPNeighbor{{InterfaceID: "Ethernet0"}}},
+			PeerGroups: []agent.FabricBGPPeerGroup{
+				{Name: "north", Neighbors: []agent.FabricBGPNeighbor{{InterfaceID: "Ethernet0"}}},
 			},
 		}
 		out, err := frr.GenerateFRRConfig(cfg, "leaf-1", nil)
@@ -152,10 +152,10 @@ var _ = ginkgo.Describe("GenerateFRRConfig", func() {
 	})
 
 	ginkgo.It("produces no NORTH neighbor lines when NORTH peer group is absent", func() {
-		cfg := &agent.WireBGPConfig{
+		cfg := &agent.FabricBGPConfig{
 			ASN: 100,
-			PeerGroups: []agent.WireBGPPeerGroup{
-				{Name: "SOUTH", Neighbors: []agent.WireBGPNeighbor{{InterfaceID: "Vlan1", VlanID: 1}}},
+			PeerGroups: []agent.FabricBGPPeerGroup{
+				{Name: "SOUTH", Neighbors: []agent.FabricBGPNeighbor{{InterfaceID: "Vlan1", VlanID: 1}}},
 			},
 		}
 		out, err := frr.GenerateFRRConfig(cfg, "leaf-1", nil)
@@ -166,7 +166,7 @@ var _ = ginkgo.Describe("GenerateFRRConfig", func() {
 	})
 
 	ginkgo.It("produces no neighbor lines when peer groups are empty", func() {
-		cfg := &agent.WireBGPConfig{ASN: 42}
+		cfg := &agent.FabricBGPConfig{ASN: 42}
 		out, err := frr.GenerateFRRConfig(cfg, "spine-1", nil)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		gomega.Expect(out).NotTo(gomega.ContainSubstring("interface peer-group"))
@@ -185,10 +185,10 @@ var _ = ginkgo.Describe("GenerateFRRConfig", func() {
 	})
 
 	ginkgo.It("does not emit VLAN interface stanzas when no VLAN neighbors exist", func() {
-		cfg := &agent.WireBGPConfig{
+		cfg := &agent.FabricBGPConfig{
 			ASN: 50,
-			PeerGroups: []agent.WireBGPPeerGroup{
-				{Name: "NORTH", Neighbors: []agent.WireBGPNeighbor{{InterfaceID: "Ethernet0"}}},
+			PeerGroups: []agent.FabricBGPPeerGroup{
+				{Name: "NORTH", Neighbors: []agent.FabricBGPNeighbor{{InterfaceID: "Ethernet0"}}},
 			},
 		}
 		out, err := frr.GenerateFRRConfig(cfg, "spine-1", nil)
@@ -197,10 +197,10 @@ var _ = ginkgo.Describe("GenerateFRRConfig", func() {
 	})
 
 	ginkgo.It("deduplicates VLAN IDs across peer groups", func() {
-		cfg := &agent.WireBGPConfig{
+		cfg := &agent.FabricBGPConfig{
 			ASN: 100,
-			PeerGroups: []agent.WireBGPPeerGroup{
-				{Name: "SOUTH", Neighbors: []agent.WireBGPNeighbor{
+			PeerGroups: []agent.FabricBGPPeerGroup{
+				{Name: "SOUTH", Neighbors: []agent.FabricBGPNeighbor{
 					{InterfaceID: "Vlan5", VlanID: 5},
 					{InterfaceID: "Vlan5b", VlanID: 5}, // duplicate VlanID
 				}},
@@ -275,10 +275,10 @@ var _ = ginkgo.Describe("GenerateFRRConfig", func() {
 	// ── golden output ────────────────────────────────────────────────────────
 
 	ginkgo.It("renders the full expected output for a minimal spine config", func() {
-		cfg := &agent.WireBGPConfig{
+		cfg := &agent.FabricBGPConfig{
 			ASN: 200,
-			PeerGroups: []agent.WireBGPPeerGroup{
-				{Name: "NORTH", Neighbors: []agent.WireBGPNeighbor{
+			PeerGroups: []agent.FabricBGPPeerGroup{
+				{Name: "NORTH", Neighbors: []agent.FabricBGPNeighbor{
 					{InterfaceID: "Ethernet0"},
 				}},
 			},
@@ -305,10 +305,10 @@ var _ = ginkgo.Describe("GenerateFRRConfig", func() {
 	})
 
 	ginkgo.It("renders correct output for a spine config with LEAFS peer group", func() {
-		cfg := &agent.WireBGPConfig{
+		cfg := &agent.FabricBGPConfig{
 			ASN: 200,
-			PeerGroups: []agent.WireBGPPeerGroup{
-				{Name: "LEAFS", Neighbors: []agent.WireBGPNeighbor{
+			PeerGroups: []agent.FabricBGPPeerGroup{
+				{Name: "LEAFS", Neighbors: []agent.FabricBGPNeighbor{
 					{InterfaceID: "Ethernet0"},
 					{InterfaceID: "Ethernet4"},
 				}},

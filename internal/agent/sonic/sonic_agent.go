@@ -10,7 +10,6 @@ import (
 	"log"
 	"net/netip"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,8 +17,9 @@ import (
 
 	errors "github.com/ironcore-dev/sonic-operator/internal/agent/errors"
 	"github.com/ironcore-dev/sonic-operator/internal/agent/sonic/frr"
-	"github.com/ironcore-dev/sonic-operator/internal/agent/sonic/hostservices"
 	agent "github.com/ironcore-dev/sonic-operator/internal/agent/types"
+	sonicdb "github.com/ironcore-dev/sonic-operator/pkg/sonic"
+	"github.com/ironcore-dev/sonic-operator/pkg/sonic/hostservices"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/vishvananda/netlink"
@@ -317,14 +317,29 @@ func (m *SonicAgent) Connect(dbName string) (*redis.Client, error) {
 	return client, nil
 }
 
+func (m *SonicAgent) newDBAccessor() (sonicdb.DBAccessor, error) {
+	configDB, err := m.Connect("CONFIG_DB")
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to CONFIG_DB: %w", err)
+	}
+	stateDB, err := m.Connect("STATE_DB")
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to STATE_DB: %w", err)
+	}
+	applDB, err := m.Connect("APPL_DB")
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to APPL_DB: %w", err)
+	}
+	return sonicdb.NewDBAccessor(configDB, stateDB, applDB), nil
+}
+
 func (m *SonicAgent) GetDeviceInfo(ctx context.Context) (*agent.SwitchDevice, *agent.Status) {
-	rdb, err := m.Connect("CONFIG_DB")
+	db, err := m.newDBAccessor()
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to Redis: %v", err))
 	}
 
-	const deviceKey = "DEVICE_METADATA|localhost"
-	fields, err := rdb.HGetAll(ctx, deviceKey).Result()
+	fields, err := db.GetDeviceMetadata(ctx)
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to get device info: %v", err))
 	}
@@ -366,51 +381,27 @@ func (m *SonicAgent) GetDeviceInfo(ctx context.Context) (*agent.SwitchDevice, *a
 }
 
 func (m *SonicAgent) ListInterfaces(ctx context.Context) (*agent.InterfaceList, *agent.Status) {
-	configDB, err := m.Connect("CONFIG_DB")
+	db, err := m.newDBAccessor()
 	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to CONFIG_DB: %v", err))
+		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to Redis: %v", err))
 	}
 
-	// Connect to STATE_DB for operational status
-	stateDB, err := m.Connect("STATE_DB")
-	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to STATE_DB: %v", err))
-	}
-	// defer stateDB.Close()
-
-	applDB, err := m.Connect("APPL_DB")
-	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to APPL_DB: %v", err))
-	}
-
-	pattern := "PORT|*"
-	keys, err := configDB.Keys(ctx, pattern).Result()
-
+	names, err := db.ListPortNames(ctx)
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to obtain iface keys: %v", err))
 	}
 
-	interfaces := make([]agent.Interface, 0, len(keys))
-	for _, key := range keys {
-		var name string
-		if _, err := fmt.Sscanf(key, "PORT|%s", &name); err != nil {
-			return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to parse interface name from key %s: %v", key, err))
-		}
-
-		// Get operational status from STATE_DB
-		stateKey := fmt.Sprintf("PORT_TABLE|%s", name)
-		stateFields, err := stateDB.HGetAll(ctx, stateKey).Result()
+	interfaces := make([]agent.Interface, 0, len(names))
+	for _, name := range names {
+		stateFields, err := db.GetPortStateFields(ctx, name)
 		if err != nil {
-			// If state info is not available, use default values
 			stateFields = make(map[string]string)
 		}
-		applKey := fmt.Sprintf("PORT_TABLE:%s", name)
-		applFields, err := applDB.HGetAll(ctx, applKey).Result()
+		applFields, err := db.GetPortApplFields(ctx, name)
 		if err != nil {
 			return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to get state info for interface %s: %v", name, err))
 		}
 
-		// Determine operational status
 		operStatus := agent.StatusDown
 		if applFields["oper_status"] == "up" {
 			operStatus = agent.StatusUp
@@ -421,7 +412,6 @@ func (m *SonicAgent) ListInterfaces(ctx context.Context) (*agent.InterfaceList, 
 			adminStatus = agent.StatusUp
 		}
 
-		// Use device MAC as interface MAC (common in SONiC)
 		link, err := netlink.LinkByName(name)
 		if err != nil {
 			return nil, agent.NewErrorStatus(errors.NOT_FOUND, fmt.Sprintf("failed to get interface %s: %v", name, err))
@@ -432,12 +422,7 @@ func (m *SonicAgent) ListInterfaces(ctx context.Context) (*agent.InterfaceList, 
 			return nil, agent.NewErrorStatus(errors.NOT_FOUND, fmt.Sprintf("no MAC address found for interface %s", name))
 		}
 
-		abstractName, err := agent.NativeNameToAbstractName(name)
-		if err != nil {
-			return nil, agent.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to convert native name to abstract name: %v", err))
-		}
-
-		alias, err := configDB.HGet(ctx, fmt.Sprintf("PORT|%s", name), "alias").Result()
+		alias, err := db.GetPortAlias(ctx, name)
 		if err != nil {
 			return nil, errors.NewErrorStatus(errors.REDIS_KEY_CHECK_FAIL, fmt.Sprintf("failed to get alias: %v", err))
 		}
@@ -446,7 +431,6 @@ func (m *SonicAgent) ListInterfaces(ctx context.Context) (*agent.InterfaceList, 
 			TypeMeta: agent.TypeMeta{
 				Kind: agent.InterfaceKind,
 			},
-			Name:            abstractName,
 			NativeName:      name,
 			AliasName:       alias,
 			MacAddress:      mac.String(),
@@ -466,21 +450,13 @@ func (m *SonicAgent) ListInterfaces(ctx context.Context) (*agent.InterfaceList, 
 }
 
 func (m *SonicAgent) ListInterfacesV2(ctx context.Context) ([]string, *agent.Status) {
-	configDB, err := m.Connect("CONFIG_DB")
+	db, err := m.newDBAccessor()
 	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to CONFIG_DB: %v", err))
+		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
 	}
-	keys, err := scanKeys(ctx, configDB, "PORT|*")
+	names, err := db.ListPortNames(ctx)
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to obtain iface keys: %v", err))
-	}
-	names := make([]string, 0, len(keys))
-	for _, key := range keys {
-		var name string
-		if _, err := fmt.Sscanf(key, "PORT|%s", &name); err != nil {
-			continue
-		}
-		names = append(names, name)
 	}
 	return names, nil
 }
@@ -559,180 +535,111 @@ func (m *SonicAgent) Reboot(ctx context.Context) *agent.Status {
 }
 
 func (m *SonicAgent) SetInterfaceAdminStatus(ctx context.Context, iface *agent.Interface) (*agent.Interface, *agent.Status) {
-	// Validate input
-	var ifaceName string
-	var err error
-
-	if iface == nil || iface.Name == "" {
+	if iface == nil || iface.NativeName == "" {
 		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, "interface name cannot be empty")
 	}
-	if !strings.HasPrefix(iface.Name, "Ethernet") && !strings.HasPrefix(iface.Name, "eth") {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, "invalid interface name. Must start with 'Ethernet' or 'eth'")
-	}
-	if strings.HasPrefix(iface.Name, "eth") {
-		ifaceName, err = agent.AbstractNameToNativeName(iface.Name)
-		if err != nil {
-			return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to convert abstract name to native name: %v", err))
-		}
-	} else {
-		ifaceName = iface.Name
-	}
+	ifaceName := iface.NativeName
 
-	configDB, err := m.Connect("CONFIG_DB")
+	db, err := m.newDBAccessor()
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to CONFIG_DB: %v", err))
 	}
 
-	portKey := fmt.Sprintf("PORT|%s", ifaceName)
-
 	// store the current admin status for rollback
-	fields, err := configDB.HGetAll(ctx, portKey).Result()
+	fields, err := db.GetPortFields(ctx, ifaceName)
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.REDIS_KEY_CHECK_FAIL, fmt.Sprintf("failed to get current admin status: %v", err))
 	}
 	currentAdminStatus := fields["admin_status"]
 
-	// Set admin status in CONFIG_DB
 	adminStatusStr := string(iface.AdminStatus)
-	err = configDB.HSet(ctx, portKey, "admin_status", adminStatusStr).Err()
-	if err != nil {
+	if err := db.SetPortAdminStatus(ctx, ifaceName, adminStatusStr); err != nil {
 		return nil, errors.NewErrorStatus(errors.REDIS_HSET_FAIL, fmt.Sprintf("failed to set admin status: %v", err))
 	}
 	// Persist changes to config_db.json
 	if status := m.SaveConfig(ctx); status != nil {
 		// Try to rollback if save fails
-		_ = configDB.HSet(ctx, portKey, "admin_status", currentAdminStatus).Err()
+		_ = db.SetPortAdminStatus(ctx, ifaceName, currentAdminStatus)
 		return nil, status
 	}
 
-	// Verify the interface exists by checking if we can get its current state
-	exists, err := configDB.Exists(ctx, portKey).Result()
+	// Verify the interface exists
+	exists, err := db.HasPort(ctx, ifaceName)
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.REDIS_KEY_CHECK_FAIL, fmt.Sprintf("failed to verify interface existence: %v", err))
 	}
-	if exists == 0 {
+	if !exists {
 		return nil, errors.NewErrorStatus(errors.NOT_FOUND, fmt.Sprintf("interface %s not found", ifaceName))
 	}
 
 	time.Sleep(1000 * time.Millisecond)
 
-	// Get updated interface status from STATE_DB
-	stateDB, err := m.Connect("STATE_DB")
-	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to STATE_DB: %v", err))
-	}
-
-	stateKey := fmt.Sprintf("PORT_TABLE|%s", ifaceName)
-	stateFields, err := stateDB.HGetAll(ctx, stateKey).Result()
-	_ = stateFields // currently we don't use any field from stateFields, but we get it anyway to check if the interface is still there after the update. If the key is gone, it means the interface is deleted during the update, we can return not found error in that case.
+	// Get updated interface status from STATE_DB (existence check only)
+	stateFields, err := db.GetPortStateFields(ctx, ifaceName)
+	_ = stateFields
 	if err != nil {
 		// rollback admin status
-		err = configDB.HSet(ctx, portKey, "admin_status", currentAdminStatus).Err()
-		if err != nil {
-			return nil, errors.NewErrorStatus(errors.REDIS_HSET_FAIL, fmt.Sprintf("failed to rollback admin status: %v", err))
+		if rerr := db.SetPortAdminStatus(ctx, ifaceName, currentAdminStatus); rerr != nil {
+			return nil, errors.NewErrorStatus(errors.REDIS_HSET_FAIL, fmt.Sprintf("failed to rollback admin status: %v", rerr))
 		}
 		return nil, errors.NewErrorStatus(errors.REDIS_KEY_CHECK_FAIL, fmt.Sprintf("failed to get state info: %v", err))
 	}
 
-	applDB, err := m.Connect("APPL_DB")
+	applFields, err := db.GetPortApplFields(ctx, ifaceName)
 	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to APPL_DB: %v", err))
-	}
-	// get the newest operational status
-	applKey := fmt.Sprintf("PORT_TABLE:%s", ifaceName)
-	applFields, err := applDB.HGetAll(ctx, applKey).Result()
-	if err != nil {
-		// If state info is not available, use default values
 		applFields = make(map[string]string)
 	}
 
-	// Determine operational status
 	operStatus := agent.StatusDown
 	if applFields["oper_status"] == "up" {
 		operStatus = agent.StatusUp
 	}
 
-	alias, err := configDB.HGet(ctx, fmt.Sprintf("PORT|%s", ifaceName), "alias").Result()
+	alias, err := db.GetPortAlias(ctx, ifaceName)
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.REDIS_KEY_CHECK_FAIL, fmt.Sprintf("failed to get alias: %v", err))
 	}
 
-	abstractName, _ := agent.NativeNameToAbstractName(ifaceName)
-	resultInterface := &agent.Interface{
+	return &agent.Interface{
 		TypeMeta: agent.TypeMeta{
 			Kind: agent.InterfaceKind,
 		},
-		Name:            abstractName,
 		NativeName:      ifaceName,
-		AliasName:       alias, // In SONiC, abstract name is the same as native name for physical interfaces
+		AliasName:       alias,
 		MacAddress:      "",
 		OperationStatus: operStatus,
 		AdminStatus:     iface.AdminStatus,
 		Status:          agent.Status{Code: 0, Message: "ok"},
-	}
-	return resultInterface, nil
+	}, nil
 }
-
 func (m *SonicAgent) GetInterface(ctx context.Context, iface *agent.Interface) (*agent.Interface, *agent.Status) {
-	// Validate input
-	var ifaceName string
-	var err error
-
-	if iface == nil || iface.Name == "" {
+	if iface == nil || iface.NativeName == "" {
 		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, "interface name cannot be empty")
 	}
-	if !strings.HasPrefix(iface.Name, "Ethernet") && !strings.HasPrefix(iface.Name, "eth") {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, "invalid interface name. Must start with 'Ethernet' or 'eth'")
-	}
-	if strings.HasPrefix(iface.Name, "eth") {
-		ifaceName, err = agent.AbstractNameToNativeName(iface.Name)
-		if err != nil {
-			return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to convert abstract name to native name: %v", err))
-		}
-	} else {
-		ifaceName = iface.Name
-	}
+	ifaceName := iface.NativeName
 
-	configDB, err := m.Connect("CONFIG_DB")
+	db, err := m.newDBAccessor()
 	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to CONFIG_DB: %v", err))
+		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to Redis: %v", err))
 	}
 
-	// Connect to STATE_DB for operational status
-	stateDB, err := m.Connect("STATE_DB")
-	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to STATE_DB: %v", err))
-	}
-
-	// Check if interface exists in CONFIG_DB
-	portKey := fmt.Sprintf("PORT|%s", ifaceName)
-	exists, err := configDB.Exists(ctx, portKey).Result()
+	exists, err := db.HasPort(ctx, ifaceName)
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to check interface existence: %v", err))
 	}
-	if exists == 0 {
+	if !exists {
 		return nil, errors.NewErrorStatus(errors.NOT_FOUND, fmt.Sprintf("interface %s not found", ifaceName))
 	}
 
-	// Get operational status from STATE_DB
-	stateKey := fmt.Sprintf("PORT_TABLE|%s", ifaceName)
-	stateFields, err := stateDB.HGetAll(ctx, stateKey).Result()
+	stateFields, err := db.GetPortStateFields(ctx, ifaceName)
 	if err != nil {
-		// If state info is not available, use default values
 		stateFields = make(map[string]string)
 	}
-	applDB, err := m.Connect("APPL_DB")
+	applFields, err := db.GetPortApplFields(ctx, ifaceName)
 	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to APPL_DB: %v", err))
-	}
-	applKey := fmt.Sprintf("PORT_TABLE:%s", ifaceName)
-	applFields, err := applDB.HGetAll(ctx, applKey).Result()
-	if err != nil {
-		// If state info is not available, use default values
 		applFields = make(map[string]string)
 	}
 
-	// Determine operational status
 	operStatus := agent.StatusDown
 	if applFields["oper_status"] == "up" {
 		operStatus = agent.StatusUp
@@ -743,7 +650,6 @@ func (m *SonicAgent) GetInterface(ctx context.Context, iface *agent.Interface) (
 		adminStatus = agent.StatusUp
 	}
 
-	// Get interface MAC address using netlink
 	link, err := netlink.LinkByName(ifaceName)
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.NOT_FOUND, fmt.Sprintf("failed to get interface %s: %v", ifaceName, err))
@@ -754,160 +660,98 @@ func (m *SonicAgent) GetInterface(ctx context.Context, iface *agent.Interface) (
 		return nil, errors.NewErrorStatus(errors.NOT_FOUND, fmt.Sprintf("no MAC address found for interface %s", ifaceName))
 	}
 
-	alias, err := configDB.HGet(ctx, fmt.Sprintf("PORT|%s", ifaceName), "alias").Result()
+	alias, err := db.GetPortAlias(ctx, ifaceName)
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.REDIS_KEY_CHECK_FAIL, fmt.Sprintf("failed to get alias: %v", err))
 	}
 
-	abstractName, err := agent.NativeNameToAbstractName(ifaceName)
-	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to convert native name to abstract name: %v", err))
-	}
-
-	resultInterface := &agent.Interface{
+	return &agent.Interface{
 		TypeMeta: agent.TypeMeta{
 			Kind: agent.InterfaceKind,
 		},
-		Name:            abstractName,
 		NativeName:      ifaceName,
-		AliasName:       alias, // In SONiC, abstract name is the same as native name for physical interfaces
+		AliasName:       alias,
 		MacAddress:      mac.String(),
 		OperationStatus: operStatus,
 		AdminStatus:     adminStatus,
 		Status:          agent.Status{Code: 0, Message: "ok"},
-	}
-
-	return resultInterface, nil
+	}, nil
 }
 
 func (m *SonicAgent) GetInterfaceNeighbor(ctx context.Context, iface *agent.Interface) (*agent.InterfaceNeighbor, *agent.Status) {
-	var ifaceName string
-	var err error
-
-	if iface == nil || iface.Name == "" {
+	if iface == nil || iface.NativeName == "" {
 		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, "interface name cannot be empty")
 	}
-	if !strings.HasPrefix(iface.Name, "Ethernet") && !strings.HasPrefix(iface.Name, "eth") {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, "invalid interface name. Must start with 'Ethernet' or 'eth'")
-	}
-	if strings.HasPrefix(iface.Name, "eth") {
-		ifaceName, err = agent.AbstractNameToNativeName(iface.Name)
-		if err != nil {
-			return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to convert abstract name to native name: %v", err))
-		}
-	} else {
-		ifaceName = iface.Name
-	}
+	ifaceName := iface.NativeName
 
-	applDB, err := m.Connect("APPL_DB")
+	db, err := m.newDBAccessor()
 	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to APPL_DB: %v", err))
+		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to Redis: %v", err))
 	}
 
-	lldpKey := fmt.Sprintf("LLDP_ENTRY_TABLE:%s", ifaceName)
-
-	// Check if LLDP entry exists for this interface
-	exists, err := applDB.Exists(ctx, lldpKey).Result()
+	lldpFields, found, err := db.GetLLDPEntry(ctx, ifaceName)
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to check LLDP entry existence: %v", err))
 	}
-	if exists == 0 {
+	if !found {
 		return nil, errors.NewErrorStatus(errors.NOT_FOUND, fmt.Sprintf("no LLDP neighbor found for interface %s", ifaceName))
 	}
 
-	// Get all LLDP fields
-	lldpFields, err := applDB.HGetAll(ctx, lldpKey).Result()
-	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to get LLDP entry: %v", err))
-	}
-
-	// MacAddress from lldp_rem_chassis_id (when chassis_id_subtype is 4 - MAC address)
 	macAddress := lldpFields["lldp_rem_chassis_id"]
-
-	// SystemName from lldp_rem_sys_name
 	systemName := lldpFields["lldp_rem_sys_name"]
 
-	// Handle (remote interface name) from lldp_rem_port_desc
-	// Note: lldp_rem_port_id contains "Eth5(Port5)" format, lldp_rem_port_desc contains "Ethernet16"
 	handle := lldpFields["lldp_rem_port_desc"]
 	if handle == "" {
-		// Fallback to lldp_rem_port_id if port_desc is not available
 		handle = lldpFields["lldp_rem_port_id"]
-	} else {
-		handle, err = agent.NativeNameToAbstractName(handle)
-		if err != nil {
-			return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to convert native name to abstract name: %v", err))
-		}
 	}
 
-	// Validate that we have the essential information
 	if macAddress == "" || systemName == "" {
 		return nil, errors.NewErrorStatus(errors.NOT_FOUND, fmt.Sprintf("incomplete LLDP information for interface %s", ifaceName))
 	}
 
-	neighbor := &agent.InterfaceNeighbor{
+	return &agent.InterfaceNeighbor{
 		TypeMeta: agent.TypeMeta{
 			Kind: agent.InterfaceNeighborKind,
 		},
-		Name:       ifaceName, // Interface name of yourself
+		Name:       ifaceName,
 		MacAddress: macAddress,
 		SystemName: systemName,
-		Handle:     handle, // Remote interface name
+		Handle:     handle,
 		Status:     agent.Status{Code: 0, Message: "ok"},
-	}
-
-	return neighbor, nil
+	}, nil
 }
 
 func (m *SonicAgent) ListPorts(ctx context.Context) (*agent.PortList, *agent.Status) {
-	// Connect to APPL_DB (table 0)
-	applDB, err := m.Connect("APPL_DB")
+	db, err := m.newDBAccessor()
 	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to APPL_DB: %v", err))
+		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to Redis: %v", err))
 	}
 
-	// List keys starting with PORT_TABLE
-	pattern := "PORT_TABLE:*"
-	keys, err := applDB.Keys(ctx, pattern).Result()
+	entries, err := db.ListPortTableEntries(ctx)
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to obtain PORT_TABLE keys: %v", err))
 	}
 
 	ports := make([]agent.Port, 0)
-	for _, key := range keys {
-		var portName string
-		if _, err := fmt.Sscanf(key, "PORT_TABLE:%s", &portName); err != nil {
-			continue // Skip malformed keys
-		}
-
-		// Get the port configuration
-		fields, err := applDB.HGetAll(ctx, key).Result()
-		if err != nil {
-			continue // Skip if we can't get the fields
-		}
-
-		// Check if this represents a physical port by examining the "parent_port" field
-		// If parent_port equals the port name itself, it's a physical port
+	for portName, fields := range entries {
 		parentPort, exists := fields["parent_port"]
 		if !exists || parentPort != portName {
 			continue // Skip non-physical ports (sub-interfaces, VLANs, etc.)
 		}
 
-		// Get alias if available
 		alias := fields["alias"]
 		if alias == "" {
-			alias = portName // Use port name as alias if not specified
+			alias = portName
 		}
 
-		port := agent.Port{
+		ports = append(ports, agent.Port{
 			TypeMeta: agent.TypeMeta{
 				Kind: agent.PortKind,
 			},
 			Name:   portName,
 			Alias:  alias,
 			Status: agent.Status{Code: 0, Message: "ok"},
-		}
-		ports = append(ports, port)
+		})
 	}
 
 	return &agent.PortList{
@@ -947,26 +791,21 @@ func (m *SonicAgent) ListPortsV2(ctx context.Context) (*agent.PortDetailsList, *
 		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
 	}
 
-	names, err := db.listPortNames(ctx)
+	names, err := db.ListPortNames(ctx)
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
 	}
 
 	details := make([]agent.PortDetails, 0, len(names))
 	for _, portName := range names {
-		cfg, _ := db.getPortConfig(ctx, portName)
-		state := db.getPortState(ctx, portName)
-		info := db.getTransceiverInfo(ctx, portName)
-
-		abstractName, err := agent.NativeNameToAbstractName(portName)
-		if err != nil {
-			abstractName = portName
-		}
+		cfg, _ := db.GetPortConfig(ctx, portName)
+		state := db.GetPortState(ctx, portName)
+		info := db.GetTransceiverInfo(ctx, portName)
 
 		details = append(details, agent.PortDetails{
-			ID:                  abstractName,
+			ID:                  portName,
 			Type:                speedMbpsToType(cfg.Speed),
-			SupportedSpeedsGbps: parseSupportedSpeeds(state.SupportedSpeeds, cfg.Speed),
+			SupportedSpeedsGbps: sonicdb.ParseSupportedSpeeds(state.SupportedSpeeds, cfg.Speed),
 			Transceiver:         info.Type,
 			Status:              agent.Status{Code: 0, Message: "ok"},
 		})
@@ -979,90 +818,61 @@ func (m *SonicAgent) ListPortsV2(ctx context.Context) (*agent.PortDetailsList, *
 }
 
 func (m *SonicAgent) SetInterfaceAliasName(ctx context.Context, iface *agent.Interface) (*agent.Interface, *agent.Status) {
-	// Validate input
-	var ifaceName string
-	var err error
-
-	if iface == nil || iface.Name == "" {
+	if iface == nil || iface.NativeName == "" {
 		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, "interface name cannot be empty")
 	}
-	if !strings.HasPrefix(iface.Name, "Ethernet") && !strings.HasPrefix(iface.Name, "eth") {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, "invalid interface name. Must start with 'Ethernet' or 'eth'")
-	}
-	if strings.HasPrefix(iface.Name, "eth") {
-		ifaceName, err = agent.AbstractNameToNativeName(iface.Name)
-		if err != nil {
-			return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to convert abstract name to native name: %v", err))
-		}
-	} else {
-		ifaceName = iface.Name
-	}
+	ifaceName := iface.NativeName
 
-	configDB, err := m.Connect("CONFIG_DB")
+	db, err := m.newDBAccessor()
 	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to CONFIG_DB: %v", err))
+		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to Redis: %v", err))
 	}
 
-	portKey := fmt.Sprintf("PORT|%s", ifaceName)
-	log.Printf("Setting alias for port: %s", portKey)
+	log.Printf("Setting alias for port: PORT|%s", ifaceName)
 
-	// store the current s Alias name for rollback
-	fields, err := configDB.HGetAll(ctx, portKey).Result()
+	fields, err := db.GetPortFields(ctx, ifaceName)
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.REDIS_KEY_CHECK_FAIL, fmt.Sprintf("failed to get current alias name: %v", err))
 	}
 	currentAlias := fields["alias"]
+
 	futureAlias := iface.AliasName
 	if futureAlias == "" {
-		futureAlias = iface.Name // If alias is empty, use abstract name as alias
+		futureAlias = iface.NativeName
 	}
 
-	aliasStr := futureAlias
-	err = configDB.HSet(ctx, portKey, "alias", aliasStr).Err()
-	if err != nil {
+	if err := db.SetPortAlias(ctx, ifaceName, futureAlias); err != nil {
 		return nil, errors.NewErrorStatus(errors.REDIS_HSET_FAIL, fmt.Sprintf("failed to set alias name: %v", err))
 	}
 	// Persist changes to config_db.json
 	if status := m.SaveConfig(ctx); status != nil {
 		log.Printf("Failed to save config after setting alias name: %v", status)
-		// Try to rollback if save fails
-		err = configDB.HSet(ctx, portKey, "alias", currentAlias).Err()
-		if err != nil {
-			return nil, errors.NewErrorStatus(errors.REDIS_HSET_FAIL, fmt.Sprintf("failed to rollback alias name: %v", err))
+		if rerr := db.SetPortAlias(ctx, ifaceName, currentAlias); rerr != nil {
+			return nil, errors.NewErrorStatus(errors.REDIS_HSET_FAIL, fmt.Sprintf("failed to rollback alias name: %v", rerr))
 		}
 		return nil, status
 	}
 
-	// Verify the interface exists by checking if we can get its current state
-	exists, err := configDB.Exists(ctx, portKey).Result()
+	exists, err := db.HasPort(ctx, ifaceName)
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.REDIS_KEY_CHECK_FAIL, fmt.Sprintf("failed to verify interface existence: %v", err))
 	}
-	if exists == 0 {
-		return nil, errors.NewErrorStatus(errors.NOT_FOUND, fmt.Sprintf("interface %s not found", iface.Name))
+	if !exists {
+		return nil, errors.NewErrorStatus(errors.NOT_FOUND, fmt.Sprintf("interface %s not found", iface.NativeName))
 	}
 
-	applDB, err := m.Connect("APPL_DB")
+	applFields, err := db.GetPortApplFields(ctx, ifaceName)
 	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to APPL_DB: %v", err))
-	}
-	applKey := fmt.Sprintf("PORT_TABLE:%s", ifaceName)
-	applFields, err := applDB.HGetAll(ctx, applKey).Result()
-	if err != nil {
-		// If state info is not available, use default values
 		applFields = make(map[string]string)
 	}
 
-	// Determine operational status
 	operStatus := agent.StatusDown
 	if applFields["oper_status"] == "up" {
 		operStatus = agent.StatusUp
 	}
 
-	// Return updated interface
 	updatedIface := *iface
 	updatedIface.OperationStatus = operStatus
-
 	return &updatedIface, nil
 }
 
@@ -1175,295 +985,20 @@ func (m *SonicAgent) GetLastRebootTime(ctx context.Context) (time.Time, *agent.S
 	return t, nil
 }
 
-func (m *SonicAgent) EnsureInterface(ctx context.Context, req *agent.EnsureInterfaceRequest) *agent.Status {
-
-	switch req.Type {
-	case "Loopback":
-		db, err := m.newDBAccessor()
-		if err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-		if err := db.ensureInterfaceLoopback(ctx, req.InterfaceName); err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-		if err := db.setAdminState(ctx, req.InterfaceName, string(req.AdminStatus)); err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-		if err := db.syncIPAddresses(ctx, req.InterfaceName, req.IPv4Prefixes); err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-		return &agent.Status{}
-
-	case "Physical":
-		nativeName, err := agent.AbstractNameToNativeName(req.InterfaceName)
-		if err != nil {
-			return &agent.Status{Code: errors.BAD_REQUEST, Message: "interface name: " + req.InterfaceName + "couldn't be parse to native name"}
-
-		}
-		db, err := m.newDBAccessor()
-		if err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-
-		if err := db.setAdminState(ctx, nativeName, string(req.AdminStatus)); err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-		if err := db.setMTU(ctx, nativeName, int(req.MTU)); err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-
-		if req.SwitchportMode == "" {
-			// Routed: remove all VLAN memberships, then sync IPs
-			if err := db.syncVLANMembers(ctx, nativeName, nil); err != nil {
-				return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-			}
-			if err := db.syncIPAddresses(ctx, nativeName, req.IPv4Prefixes); err != nil {
-				return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-			}
-		} else {
-			// Switched: remove any IP addresses, then sync VLAN memberships
-			if err := db.syncIPAddresses(ctx, nativeName, nil); err != nil {
-				return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-			}
-			desired := buildVLANMemberMap(req)
-			if err := db.syncVLANMembers(ctx, nativeName, desired); err != nil {
-				return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-			}
-		}
-		return &agent.Status{}
-
-	case "RoutedVLAN":
-		vlanIDStr := strings.TrimPrefix(req.InterfaceName, "Vlan")
-		vlanID, err := strconv.Atoi(vlanIDStr)
-		if err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST,
-				fmt.Sprintf("invalid RoutedVLAN interface name %q: %v", req.InterfaceName, err))
-		}
-		if status := m.EnsureVLAN(ctx, &agent.VLANRequest{
-			VlanID:     int32(vlanID),
-			AdminState: string(req.AdminStatus),
-		}); status != nil {
-			return status
-		}
-		db, err := m.newDBAccessor()
-		if err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-		if err := db.ensureVLANInterface(ctx, req.InterfaceName, req.VRFName); err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-		if err := db.syncIPAddresses(ctx, req.InterfaceName, req.IPv4Prefixes); err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-		return &agent.Status{}
-
-	default:
-		return &agent.Status{Code: errors.BAD_REQUEST, Message: "type " + req.Type + "not implemented"}
-
-	}
-
-}
-
-// buildVLANMemberMap converts switchport request fields to a map of vlanName→taggingMode
-// suitable for syncVLANMembers. Access mode produces one untagged entry; trunk mode
-// produces tagged entries for AllowedVlans and an untagged entry for NativeVlan.
-func buildVLANMemberMap(req *agent.EnsureInterfaceRequest) map[string]string {
-	m := make(map[string]string)
-	switch req.SwitchportMode {
-	case "access":
-		if req.AccessVlan > 0 {
-			m[fmt.Sprintf("Vlan%d", req.AccessVlan)] = "untagged"
-		}
-	case "trunk":
-		for _, vlan := range req.AllowedVlans {
-			m[fmt.Sprintf("Vlan%d", vlan)] = "tagged"
-		}
-		if req.NativeVlan > 0 {
-			m[fmt.Sprintf("Vlan%d", req.NativeVlan)] = "untagged"
-		}
-	}
-	return m
-}
-
-func (m *SonicAgent) DeleteInterface(ctx context.Context, interfaceName string) *agent.Status {
-	db, err := m.newDBAccessor()
-	if err != nil {
-		return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-	}
-
-	switch {
-	case strings.HasPrefix(interfaceName, "Vlan"):
-		vlanIDStr := strings.TrimPrefix(interfaceName, "Vlan")
-		vlanID, err := strconv.Atoi(vlanIDStr)
-		if err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST,
-				fmt.Sprintf("invalid VLAN interface name %q: %v", interfaceName, err))
-		}
-		return m.DeleteVLAN(ctx, int32(vlanID))
-
-	case strings.HasPrefix(interfaceName, "Loopback"):
-		if err := db.syncIPAddresses(ctx, interfaceName, nil); err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-		if err := db.deleteInterfaceLoopback(ctx, interfaceName); err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-
-	default:
-		nativeName, err := agent.AbstractNameToNativeName(interfaceName)
-		if err != nil {
-			nativeName = interfaceName
-		}
-		if err := db.setAdminState(ctx, nativeName, "down"); err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-		if err := db.syncIPAddresses(ctx, nativeName, nil); err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-		if err := db.syncVLANMembers(ctx, nativeName, nil); err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-	}
-
-	return nil
-}
-
 func (m *SonicAgent) GetInterfaceStatus(ctx context.Context, interfaceName string) (*agent.InterfaceStatus, *agent.Status) {
 	db, err := m.newDBAccessor()
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, fmt.Sprintf("failed to connect to DB: %v", err))
 	}
-	adminStatus, err := db.getAdminStatus(ctx, interfaceName)
+	adminStatus, err := db.GetAdminStatus(ctx, interfaceName)
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.REDIS_KEY_CHECK_FAIL, fmt.Sprintf("failed to get admin status: %v", err))
 	}
-	operStatus, err := db.getOperStatus(ctx, interfaceName)
+	operStatus, err := db.GetOperStatus(ctx, interfaceName)
 	if err != nil {
 		return nil, errors.NewErrorStatus(errors.REDIS_KEY_CHECK_FAIL, fmt.Sprintf("failed to get oper status: %v", err))
 	}
 	return &agent.InterfaceStatus{AdminStatus: adminStatus, OperStatus: operStatus}, nil
-}
-
-func (m *SonicAgent) EnsureDHCPRelay(ctx context.Context, req *agent.DHCPRelayRequest) *agent.Status {
-	db, err := m.newDBAccessor()
-	if err != nil {
-		return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-	}
-	for _, ifaceName := range req.InterfaceNames {
-		exists, err := db.vlanExists(ctx, ifaceName)
-		if err != nil {
-			return errors.NewErrorStatus(errors.REDIS_KEY_CHECK_FAIL, err.Error())
-		}
-		if !exists {
-			return errors.NewErrorStatus(errors.NOT_FOUND, fmt.Sprintf("VLAN %s does not exist", ifaceName))
-		}
-		if err := db.ensureDHCPRelay(ctx, ifaceName, req.ServerAddresses); err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-	}
-	return nil
-}
-
-func (m *SonicAgent) DeleteDHCPRelay(ctx context.Context, interfaceNames []string) *agent.Status {
-	db, err := m.newDBAccessor()
-	if err != nil {
-		return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-	}
-	for _, ifaceName := range interfaceNames {
-		if err := db.deleteDHCPRelay(ctx, ifaceName); err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-	}
-	return nil
-}
-
-func (m *SonicAgent) GetDHCPRelayStatus(ctx context.Context, interfaceNames []string) (*agent.DHCPRelayStatus, *agent.Status) {
-	db, err := m.newDBAccessor()
-	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-	}
-	var configured []string
-	for _, ifaceName := range interfaceNames {
-		has, err := db.hasDHCPRelay(ctx, ifaceName)
-		if err != nil {
-			return nil, errors.NewErrorStatus(errors.REDIS_KEY_CHECK_FAIL, err.Error())
-		}
-		if has {
-			configured = append(configured, ifaceName)
-		}
-	}
-	return &agent.DHCPRelayStatus{ConfiguredInterfaces: configured}, nil
-}
-
-func (m *SonicAgent) EnsureVLAN(ctx context.Context, req *agent.VLANRequest) *agent.Status {
-	vlanName := fmt.Sprintf("Vlan%d", req.VlanID)
-	db, err := m.newDBAccessor()
-	if err != nil {
-		return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-	}
-	if err := db.ensureVLAN(ctx, vlanName); err != nil {
-		return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-	}
-	if req.Name != "" {
-		if err := db.configDB.HSet(ctx, "VLAN|"+vlanName, "description", req.Name).Err(); err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-	}
-	if req.AdminState != "" {
-		if err := db.setAdminState(ctx, vlanName, req.AdminState); err != nil {
-			return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-		}
-	}
-	return nil
-}
-
-func (m *SonicAgent) DeleteVLAN(ctx context.Context, vlanID int32) *agent.Status {
-	vlanName := fmt.Sprintf("Vlan%d", vlanID)
-	db, err := m.newDBAccessor()
-	if err != nil {
-		return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-	}
-	if err := db.syncIPAddresses(ctx, vlanName, nil); err != nil {
-		return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-	}
-	if err := db.deleteVLANInterface(ctx, vlanName); err != nil {
-		return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-	}
-	if err := db.deleteVLAN(ctx, vlanName); err != nil {
-		return errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-	}
-	return nil
-}
-
-func (m *SonicAgent) GetVLANStatus(ctx context.Context, vlanID int32) (*agent.VLANStatus, *agent.Status) {
-	vlanName := fmt.Sprintf("Vlan%d", vlanID)
-	db, err := m.newDBAccessor()
-	if err != nil {
-		return nil, errors.NewErrorStatus(errors.BAD_REQUEST, err.Error())
-	}
-	operStatus, err := db.getOperStatus(ctx, vlanName)
-	if err != nil {
-		return nil, errors.NewErrorStatus(errors.REDIS_KEY_CHECK_FAIL, err.Error())
-	}
-	return &agent.VLANStatus{OperStatus: operStatus}, nil
-}
-
-func (m *SonicAgent) EnsureLLDP(_ context.Context, _ *agent.LLDPRequest) *agent.Status {
-	return &agent.Status{Code: 0, Message: "LLDP cannot be configured per interface on Sonic"}
-	// return errors.NewErrorStatus(errors.BAD_REQUEST, "EnsureLLDP not implemented")
-
-}
-
-func (m *SonicAgent) DeleteLLDP(_ context.Context) *agent.Status {
-	return &agent.Status{Code: 0, Message: "LLDP cannot be configured per interface on Sonic"}
-
-	// return errors.NewErrorStatus(errors.BAD_REQUEST, "DeleteLLDP not implemented")
-}
-
-func (m *SonicAgent) GetLLDPStatus(_ context.Context) (*agent.LLDPStatus, *agent.Status) {
-	return &agent.LLDPStatus{OperStatus: true}, &agent.Status{Code: 0, Message: "feature cannot be disabled"}
-
-	// return nil, errors.NewErrorStatus(errors.BAD_REQUEST, "GetLLDPStatus not implemented")
 }
 
 // vlanPrefixFromLoopback derives a /80 IPv6 prefix for a VLAN interface from the
@@ -1514,29 +1049,29 @@ func (m *SonicAgent) ApplySwitch(ctx context.Context, req *agent.ApplySwitchRequ
 	return m.applySwitch(ctx, db, req.Config, req.Device)
 }
 
-func (m *SonicAgent) applySwitch(ctx context.Context, db *dbAccessor, cfg agent.WireSwitchConfig, device string) *agent.Status {
+func (m *SonicAgent) applySwitch(ctx context.Context, db sonicdb.DBAccessor, cfg agent.FabricSwitchConfig, device string) *agent.Status {
 	// Record that provisioning has started. Any subsequent early-return on error
 	// will overwrite this with state=Error so CellStatus can report the failure.
-	_ = db.setCellState(ctx, device, "Creating", "")
+	_ = db.SetCellState(ctx, device, "Creating", "")
 
 	fail := func(msg string) *agent.Status {
-		_ = db.setCellState(ctx, device, "Error", msg)
+		_ = db.SetCellState(ctx, device, "Error", msg)
 		return &agent.Status{Code: 1, Message: msg}
 	}
 
 	// Hostname
 	if cfg.Hostname != "" {
-		if err := db.configDB.HSet(ctx, "DEVICE_METADATA|localhost", "hostname", cfg.Hostname).Err(); err != nil {
+		if err := db.SetHostname(ctx, cfg.Hostname); err != nil {
 			return fail(fmt.Sprintf("failed to set hostname: %v", err))
 		}
 	}
 
 	// Loopback0
-	if err := db.ensureInterfaceLoopback(ctx, "Loopback0"); err != nil {
+	if err := db.EnsureInterfaceLoopback(ctx, "Loopback0"); err != nil {
 		return fail(fmt.Sprintf("failed to ensure Loopback0: %v", err))
 	}
 	if len(cfg.LoopbackIPs) > 0 {
-		if err := db.syncIPAddresses(ctx, "Loopback0", cfg.LoopbackIPs); err != nil {
+		if err := db.SyncIPAddresses(ctx, "Loopback0", cfg.LoopbackIPs); err != nil {
 			return fail(fmt.Sprintf("failed to sync loopback IPs: %v", err))
 		}
 	}
@@ -1558,7 +1093,7 @@ func (m *SonicAgent) applySwitch(ctx context.Context, db *dbAccessor, cfg agent.
 
 	// BGP / FRR config generation
 	if cfg.BGP != nil {
-		bgpCfg := &agent.WireBGPConfig{
+		bgpCfg := &agent.FabricBGPConfig{
 			ASN:        cfg.BGP.ASN,
 			RouterID:   cfg.BGP.RouterID,
 			PeerGroups: buildBGPPeerGroups(cfg),
@@ -1581,28 +1116,38 @@ func (m *SonicAgent) applySwitch(ctx context.Context, db *dbAccessor, cfg agent.
 
 	}
 
-	_ = db.setCellState(ctx, device, "Active", "")
+	_ = db.SetCellState(ctx, device, "Active", "")
 	return nil
+}
+
+// uplinkPortsAccessor is the minimum DB surface needed by applyUplinkPorts.
+type uplinkPortsAccessor interface {
+	sonicdb.VLANAccessor
+	sonicdb.PortAccessor
+}
+
+// vlanProvisionAccessor is the minimum DB surface needed by applyVLAN.
+type vlanProvisionAccessor interface {
+	sonicdb.VLANAccessor
+	sonicdb.InterfaceAccessor
+	sonicdb.PortAccessor
 }
 
 // applyUplinkPorts configures NORTH uplink ports (VLAN id=0): evicts them from
 // all VLANs and sets MTU + FEC.
-func applyUplinkPorts(ctx context.Context, db *dbAccessor, members []agent.WireVLANMember, fail func(string) *agent.Status) *agent.Status {
+func applyUplinkPorts(ctx context.Context, db uplinkPortsAccessor, members []agent.FabricVLANMember, fail func(string) *agent.Status) *agent.Status {
 	for _, member := range members {
-		portName, err := agent.AbstractNameToNativeName(member.InterfaceID)
-		if err != nil {
-			portName = member.InterfaceID
-		}
-		if err := db.syncVLANMembers(ctx, portName, nil); err != nil {
+		portName := member.InterfaceID
+		if err := db.SyncVLANMembers(ctx, portName, nil); err != nil {
 			return fail(fmt.Sprintf("failed to evict %s from VLANs: %v", portName, err))
 		}
-		if err := db.setMTU(ctx, portName, int(9100)); err != nil {
+		if err := db.SetMTU(ctx, portName, int(9100)); err != nil {
 			return fail(fmt.Sprintf("failed to set MTU on %s: %v", portName, err))
 		}
-		if err := db.setFEC(ctx, portName, "rs"); err != nil {
+		if err := db.SetFEC(ctx, portName, "rs"); err != nil {
 			return fail(fmt.Sprintf("failed to set FEC on %s: %v", portName, err))
 		}
-		// if err := db.setSpeed(ctx, portName, 25_000); err != nil {
+		// if err := db.SetSpeed(ctx, portName, 25_000); err != nil {
 		// 	return fail(fmt.Sprintf("failed to set speed on %s: %v", portName, err))
 		// }
 	}
@@ -1611,12 +1156,12 @@ func applyUplinkPorts(ctx context.Context, db *dbAccessor, members []agent.WireV
 
 // applyVLAN creates/updates a single VLAN entry including its interface, IP
 // addresses, DHCP relay and member port configuration.
-func applyVLAN(ctx context.Context, db *dbAccessor, cfg agent.WireSwitchConfig, vlan agent.WireVLAN, fail func(string) *agent.Status) *agent.Status {
+func applyVLAN(ctx context.Context, db vlanProvisionAccessor, cfg agent.FabricSwitchConfig, vlan agent.FabricVLAN, fail func(string) *agent.Status) *agent.Status {
 	vlanName := fmt.Sprintf("Vlan%d", vlan.ID)
-	if err := db.ensureVLAN(ctx, vlanName); err != nil {
+	if err := db.EnsureVLAN(ctx, vlanName); err != nil {
 		return fail(fmt.Sprintf("failed to ensure %s: %v", vlanName, err))
 	}
-	if err := db.ensureVLANInterface(ctx, vlanName, ""); err != nil {
+	if err := db.EnsureVLANInterface(ctx, vlanName, ""); err != nil {
 		return fail(fmt.Sprintf("failed to ensure VLAN interface %s: %v", vlanName, err))
 	}
 	prefix := vlan.Prefix
@@ -1626,31 +1171,27 @@ func applyVLAN(ctx context.Context, db *dbAccessor, cfg agent.WireSwitchConfig, 
 		}
 	}
 	if prefix != "" {
-		if err := db.syncIPAddresses(ctx, vlanName, []string{prefix}); err != nil {
+		if err := db.SyncIPAddresses(ctx, vlanName, []string{prefix}); err != nil {
 			return fail(fmt.Sprintf("failed to sync IPs for %s: %v", vlanName, err))
 		}
 	}
 	if vlan.DHCPRelay != "" {
-		if err := db.ensureDHCPRelay(ctx, vlanName, []string{vlan.DHCPRelay}); err != nil {
+		if err := db.EnsureDHCPRelay(ctx, vlanName, []string{vlan.DHCPRelay}); err != nil {
 			return fail(fmt.Sprintf("failed to set DHCP relay for %s: %v", vlanName, err))
 		}
 	}
 	for _, member := range vlan.Members {
-		portName, err := agent.AbstractNameToNativeName(member.InterfaceID)
-		if err != nil {
-			// Not an abstract Ethernet name (e.g. PortChannel1) — use as-is.
-			portName = member.InterfaceID
-		}
-		if err := db.syncVLANMembers(ctx, portName, map[string]string{vlanName: "untagged"}); err != nil {
+		portName := member.InterfaceID
+		if err := db.SyncVLANMembers(ctx, portName, map[string]string{vlanName: "untagged"}); err != nil {
 			return fail(fmt.Sprintf("failed to sync member %s to %s: %v", portName, vlanName, err))
 		}
-		if err := db.setMTU(ctx, portName, int(9100)); err != nil {
+		if err := db.SetMTU(ctx, portName, int(9100)); err != nil {
 			return fail(fmt.Sprintf("failed to set MTU on %s: %v", portName, err))
 		}
-		if err := db.setFEC(ctx, portName, "rs"); err != nil {
+		if err := db.SetFEC(ctx, portName, "rs"); err != nil {
 			return fail(fmt.Sprintf("failed to set FEC on %s: %v", portName, err))
 		}
-		if err := db.setSpeed(ctx, portName, 25_000); err != nil {
+		if err := db.SetSpeed(ctx, portName, 25_000); err != nil {
 			return fail(fmt.Sprintf("failed to set speed on %s: %v", portName, err))
 		}
 	}
@@ -1661,7 +1202,7 @@ func applyVLAN(ctx context.Context, db *dbAccessor, cfg agent.WireSwitchConfig, 
 // Topology detection: if no VLAN has a DHCPRelay the switch is a spine.
 // Spine: single LEAFS peer group, all ports as neighbors.
 // Leaf: NORTH (id=0, no relay) and SOUTH (relay present) peer groups.
-func buildBGPPeerGroups(cfg agent.WireSwitchConfig) []agent.WireBGPPeerGroup {
+func buildBGPPeerGroups(cfg agent.FabricSwitchConfig) []agent.FabricBGPPeerGroup {
 	hasSouth := false
 	for _, vlan := range cfg.VLANs {
 		if vlan.DHCPRelay != "" {
@@ -1671,37 +1212,29 @@ func buildBGPPeerGroups(cfg agent.WireSwitchConfig) []agent.WireBGPPeerGroup {
 	}
 
 	if !hasSouth {
-		var leafsNeighbors []agent.WireBGPNeighbor
+		var leafsNeighbors []agent.FabricBGPNeighbor
 		for _, vlan := range cfg.VLANs {
 			for _, member := range vlan.Members {
-				portName, err := agent.AbstractNameToNativeName(member.InterfaceID)
-				if err != nil {
-					portName = member.InterfaceID
-				}
-				leafsNeighbors = append(leafsNeighbors, agent.WireBGPNeighbor{InterfaceID: portName})
+				leafsNeighbors = append(leafsNeighbors, agent.FabricBGPNeighbor{InterfaceID: member.InterfaceID})
 			}
 		}
-		return []agent.WireBGPPeerGroup{{Name: "LEAFS", Neighbors: leafsNeighbors}}
+		return []agent.FabricBGPPeerGroup{{Name: "LEAFS", Neighbors: leafsNeighbors}}
 	}
 
-	var northNeighbors, southNeighbors []agent.WireBGPNeighbor
+	var northNeighbors, southNeighbors []agent.FabricBGPNeighbor
 	for _, vlan := range cfg.VLANs {
 		if vlan.DHCPRelay != "" {
-			southNeighbors = append(southNeighbors, agent.WireBGPNeighbor{
+			southNeighbors = append(southNeighbors, agent.FabricBGPNeighbor{
 				VlanID:      vlan.ID,
 				InterfaceID: fmt.Sprintf("Vlan%d", vlan.ID),
 			})
 		} else {
 			for _, member := range vlan.Members {
-				portName, err := agent.AbstractNameToNativeName(member.InterfaceID)
-				if err != nil {
-					portName = member.InterfaceID
-				}
-				northNeighbors = append(northNeighbors, agent.WireBGPNeighbor{InterfaceID: portName})
+				northNeighbors = append(northNeighbors, agent.FabricBGPNeighbor{InterfaceID: member.InterfaceID})
 			}
 		}
 	}
-	return []agent.WireBGPPeerGroup{
+	return []agent.FabricBGPPeerGroup{
 		{Name: "NORTH", Neighbors: northNeighbors},
 		{Name: "SOUTH", Neighbors: southNeighbors},
 	}
@@ -1715,7 +1248,7 @@ func (m *SonicAgent) DeleteSwitch(ctx context.Context, device string) *agent.Sta
 		return &agent.Status{Code: 1, Message: err.Error()}
 	}
 
-	state, _, err := db.getCellState(ctx, device)
+	state, _, err := db.GetCellState(ctx, device)
 	if err != nil {
 		return &agent.Status{Code: 1, Message: fmt.Sprintf("failed to read reprovision state: %v", err)}
 	}
@@ -1734,7 +1267,7 @@ func (m *SonicAgent) DeleteSwitch(ctx context.Context, device string) *agent.Sta
 
 	// State is anything other than "" or "Reprovisioning" (e.g. "Active", "Error")
 	// — reprovision has not been requested yet. Kick it off.
-	_ = db.setCellState(ctx, device, cellStateReprovisioning, "")
+	_ = db.SetCellState(ctx, device, cellStateReprovisioning, "")
 
 	go func() {
 		bgCtx := context.Background()
@@ -1744,9 +1277,9 @@ func (m *SonicAgent) DeleteSwitch(ctx context.Context, device string) *agent.Sta
 			return
 		}
 		if st != nil {
-			_ = bgDB.setCellState(bgCtx, device, "Error", st.Message)
+			_ = bgDB.SetCellState(bgCtx, device, "Error", st.Message)
 		} else {
-			_ = bgDB.deleteCellState(bgCtx, device)
+			_ = bgDB.DeleteCellState(bgCtx, device)
 		}
 	}()
 
@@ -1758,7 +1291,7 @@ func (m *SonicAgent) GetCellStatus(ctx context.Context, device string) (state, m
 	if err != nil {
 		return "", "", &agent.Status{Code: 1, Message: fmt.Sprintf("failed to connect to DB: %v", err)}
 	}
-	state, message, err = db.getCellState(ctx, device)
+	state, message, err = db.GetCellState(ctx, device)
 	if err != nil {
 		return "", "", &agent.Status{Code: 1, Message: fmt.Sprintf("failed to get cell state: %v", err)}
 	}

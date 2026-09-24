@@ -10,8 +10,9 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/ironcore-dev/sonic-operator/internal/agent/sonic/hostservices"
 	agent "github.com/ironcore-dev/sonic-operator/internal/agent/types"
+	sonicdb "github.com/ironcore-dev/sonic-operator/pkg/sonic"
+	"github.com/ironcore-dev/sonic-operator/pkg/sonic/hostservices"
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	"github.com/redis/go-redis/v9"
@@ -35,10 +36,18 @@ func TestApplySwitch(t *testing.T) {
 	ginkgo.RunSpecs(t, "ApplySwitch Suite")
 }
 
-// newTestDBAccessor starts an in-process miniredis server and returns a dbAccessor
+// testDB groups a DBAccessor with the underlying Redis clients so tests can
+// inspect raw Redis state via configDB/stateDB after calling applySwitch.
+type testDB struct {
+	sonicdb.DBAccessor
+	configDB *redis.Client
+	stateDB  *redis.Client
+}
+
+// newTestDBAccessor starts an in-process miniredis server and returns a testDB
 // whose three clients all point at it (using different logical DB indices).
 // The server is stopped automatically when the test ends.
-func newTestDBAccessor(t ginkgo.GinkgoTInterface) (*dbAccessor, *miniredis.Miniredis) {
+func newTestDBAccessor(t ginkgo.GinkgoTInterface) (*testDB, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
 	newClient := func(db int) *redis.Client {
@@ -51,17 +60,20 @@ func newTestDBAccessor(t ginkgo.GinkgoTInterface) (*dbAccessor, *miniredis.Minir
 			WriteTimeout: 100 * time.Millisecond,
 		})
 	}
-	return &dbAccessor{
-		configDB: newClient(4), // CONFIG_DB
-		stateDB:  newClient(6), // STATE_DB
-		applDB:   newClient(0), // APPL_DB
+	configDB := newClient(4) // CONFIG_DB
+	stateDB := newClient(6)  // STATE_DB
+	applDB := newClient(0)   // APPL_DB
+	return &testDB{
+		DBAccessor: sonicdb.NewDBAccessor(configDB, stateDB, applDB),
+		configDB:   configDB,
+		stateDB:    stateDB,
 	}, mr
 }
 
 var _ = ginkgo.Describe("applySwitch", func() {
 	var (
 		ctx    context.Context
-		db     *dbAccessor
+		db     *testDB
 		mr     *miniredis.Miniredis
 		sa     *SonicAgent
 		device string
@@ -80,7 +92,7 @@ var _ = ginkgo.Describe("applySwitch", func() {
 	})
 
 	ginkgo.It("sets hostname in DEVICE_METADATA|localhost", func() {
-		cfg := agent.WireSwitchConfig{Hostname: "leaf-1"}
+		cfg := agent.FabricSwitchConfig{Hostname: "leaf-1"}
 		status := sa.applySwitch(ctx, db, cfg, device)
 		gomega.Expect(status).To(gomega.BeNil())
 
@@ -90,7 +102,7 @@ var _ = ginkgo.Describe("applySwitch", func() {
 	})
 
 	ginkgo.It("creates LOOPBACK_INTERFACE|Loopback0", func() {
-		cfg := agent.WireSwitchConfig{}
+		cfg := agent.FabricSwitchConfig{}
 		status := sa.applySwitch(ctx, db, cfg, device)
 		gomega.Expect(status).To(gomega.BeNil())
 
@@ -100,7 +112,7 @@ var _ = ginkgo.Describe("applySwitch", func() {
 	})
 
 	ginkgo.It("syncs loopback IPs into LOOPBACK_INTERFACE|Loopback0|<prefix>", func() {
-		cfg := agent.WireSwitchConfig{
+		cfg := agent.FabricSwitchConfig{
 			LoopbackIPs: []string{"fd00::1/128"},
 		}
 		status := sa.applySwitch(ctx, db, cfg, device)
@@ -112,8 +124,8 @@ var _ = ginkgo.Describe("applySwitch", func() {
 	})
 
 	ginkgo.It("creates VLAN|VlanN and VLAN_INTERFACE|VlanN", func() {
-		cfg := agent.WireSwitchConfig{
-			VLANs: []agent.WireVLAN{{ID: 42}},
+		cfg := agent.FabricSwitchConfig{
+			VLANs: []agent.FabricVLAN{{ID: 42}},
 		}
 		status := sa.applySwitch(ctx, db, cfg, device)
 		gomega.Expect(status).To(gomega.BeNil())
@@ -128,9 +140,9 @@ var _ = ginkgo.Describe("applySwitch", func() {
 	})
 
 	ginkgo.It("derives VLAN prefix from loopback when not explicitly set", func() {
-		cfg := agent.WireSwitchConfig{
+		cfg := agent.FabricSwitchConfig{
 			LoopbackIPs: []string{"2001:db8:0:1::1/128"},
-			VLANs:       []agent.WireVLAN{{ID: 1}},
+			VLANs:       []agent.FabricVLAN{{ID: 1}},
 		}
 		status := sa.applySwitch(ctx, db, cfg, device)
 		gomega.Expect(status).To(gomega.BeNil())
@@ -142,8 +154,8 @@ var _ = ginkgo.Describe("applySwitch", func() {
 	})
 
 	ginkgo.It("uses explicit VLAN prefix when provided", func() {
-		cfg := agent.WireSwitchConfig{
-			VLANs: []agent.WireVLAN{{ID: 5, Prefix: "fd00:cafe::/64"}},
+		cfg := agent.FabricSwitchConfig{
+			VLANs: []agent.FabricVLAN{{ID: 5, Prefix: "fd00:cafe::/64"}},
 		}
 		status := sa.applySwitch(ctx, db, cfg, device)
 		gomega.Expect(status).To(gomega.BeNil())
@@ -154,8 +166,8 @@ var _ = ginkgo.Describe("applySwitch", func() {
 	})
 
 	ginkgo.It("sets DHCP relay on VLAN", func() {
-		cfg := agent.WireSwitchConfig{
-			VLANs: []agent.WireVLAN{{ID: 10, DHCPRelay: "10.0.0.254"}},
+		cfg := agent.FabricSwitchConfig{
+			VLANs: []agent.FabricVLAN{{ID: 10, DHCPRelay: "10.0.0.254"}},
 		}
 		status := sa.applySwitch(ctx, db, cfg, device)
 		gomega.Expect(status).To(gomega.BeNil())
@@ -166,10 +178,10 @@ var _ = ginkgo.Describe("applySwitch", func() {
 	})
 
 	ginkgo.It("creates VLAN_MEMBER and sets MTU/FEC/speed on member port", func() {
-		cfg := agent.WireSwitchConfig{
-			VLANs: []agent.WireVLAN{{
+		cfg := agent.FabricSwitchConfig{
+			VLANs: []agent.FabricVLAN{{
 				ID:      1,
-				Members: []agent.WireVLANMember{{InterfaceID: "Ethernet0"}},
+				Members: []agent.FabricVLANMember{{InterfaceID: "Ethernet0"}},
 			}},
 		}
 		status := sa.applySwitch(ctx, db, cfg, device)
@@ -193,7 +205,7 @@ var _ = ginkgo.Describe("applySwitch", func() {
 	})
 
 	ginkgo.It("records Creating then Active in STATE_DB on success", func() {
-		cfg := agent.WireSwitchConfig{Hostname: "sw-1"}
+		cfg := agent.FabricSwitchConfig{Hostname: "sw-1"}
 		status := sa.applySwitch(ctx, db, cfg, device)
 		gomega.Expect(status).To(gomega.BeNil())
 
@@ -206,7 +218,7 @@ var _ = ginkgo.Describe("applySwitch", func() {
 		// Close miniredis to simulate a Redis failure mid-way.
 		mr.Close()
 
-		cfg := agent.WireSwitchConfig{Hostname: "sw-fail"}
+		cfg := agent.FabricSwitchConfig{Hostname: "sw-fail"}
 		status := sa.applySwitch(ctx, db, cfg, device)
 		gomega.Expect(status).NotTo(gomega.BeNil())
 		gomega.Expect(status.Code).To(gomega.BeEquivalentTo(1))
@@ -227,13 +239,13 @@ var _ = ginkgo.Describe("applySwitch", func() {
 		// Peer groups are derived from VLANs:
 		//   VLAN without DHCPRelay → NORTH (member port becomes neighbor)
 		//   VLAN with DHCPRelay    → SOUTH (Vlan<id> becomes neighbor)
-		cfg := agent.WireSwitchConfig{
+		cfg := agent.FabricSwitchConfig{
 			Hostname: "leaf-1",
-			BGP:      &agent.WireBGPConfig{ASN: 100},
-			VLANs: []agent.WireVLAN{
+			BGP:      &agent.FabricBGPConfig{ASN: 100},
+			VLANs: []agent.FabricVLAN{
 				{
 					ID:      120,
-					Members: []agent.WireVLANMember{{InterfaceID: "Ethernet120"}},
+					Members: []agent.FabricVLANMember{{InterfaceID: "Ethernet120"}},
 					// No DHCPRelay → NORTH
 				},
 				{

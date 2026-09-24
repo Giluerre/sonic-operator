@@ -19,8 +19,8 @@ import (
 	"net"
 	"time"
 
-	pb "github.com/ironcore-dev/sonic-operator/internal/agent/proto"
 	agent "github.com/ironcore-dev/sonic-operator/internal/agent/types"
+	pb "github.com/ironcore-dev/sonic-operator/pkg/agent/proto"
 
 	switchAgent "github.com/ironcore-dev/sonic-operator/internal/agent/interface"
 	"github.com/ironcore-dev/sonic-operator/internal/agent/sonic"
@@ -87,8 +87,7 @@ func (s *proxyServer) ListInterfaces(ctx context.Context, request *pb.ListInterf
 	var interfaces = make([]*pb.Interface, 0, len(interfaceList.Items))
 	for _, iface := range interfaceList.Items {
 		interfaces = append(interfaces, &pb.Interface{
-			Name:              iface.Name,
-			NativeName:        iface.NativeName,
+			Name:              iface.NativeName,
 			AliasName:         iface.AliasName,
 			MacAddress:        iface.MacAddress,
 			OperationalStatus: string(iface.OperationStatus),
@@ -112,7 +111,7 @@ func (s *proxyServer) SetInterfaceAdminStatus(ctx context.Context, request *pb.S
 		TypeMeta: agent.TypeMeta{
 			Kind: agent.InterfaceKind,
 		},
-		Name:        request.GetInterfaceName(),
+		NativeName:  request.GetInterfaceName(),
 		AdminStatus: agent.DeviceStatus(request.GetAdminStatus()),
 	})
 
@@ -131,7 +130,7 @@ func (s *proxyServer) SetInterfaceAdminStatus(ctx context.Context, request *pb.S
 			Message: "Success",
 		},
 		Interface: &pb.Interface{
-			Name:              iface.Name,
+			Name:              iface.NativeName,
 			MacAddress:        "",
 			OperationalStatus: string(iface.OperationStatus),
 			AdminStatus:       string(iface.AdminStatus),
@@ -176,7 +175,7 @@ func (s *proxyServer) GetInterface(ctx context.Context, request *pb.GetInterface
 		TypeMeta: agent.TypeMeta{
 			Kind: agent.InterfaceKind,
 		},
-		Name: request.GetInterfaceName(),
+		NativeName: request.GetInterfaceName(),
 	})
 	if status != nil {
 		return &pb.GetInterfaceResponse{
@@ -193,8 +192,7 @@ func (s *proxyServer) GetInterface(ctx context.Context, request *pb.GetInterface
 			Message: "Success",
 		},
 		Interface: &pb.Interface{
-			Name:              iface.Name,
-			NativeName:        iface.NativeName,
+			Name:              iface.NativeName,
 			AliasName:         iface.AliasName,
 			MacAddress:        iface.MacAddress,
 			OperationalStatus: string(iface.OperationStatus),
@@ -210,8 +208,8 @@ func (s *proxyServer) SetInterfaceAliasName(ctx context.Context, request *pb.Set
 		TypeMeta: agent.TypeMeta{
 			Kind: agent.InterfaceKind,
 		},
-		Name:      request.GetInterfaceName(),
-		AliasName: request.GetAliasName(),
+		NativeName: request.GetInterfaceName(),
+		AliasName:  request.GetAliasName(),
 	})
 
 	if status != nil {
@@ -229,9 +227,8 @@ func (s *proxyServer) SetInterfaceAliasName(ctx context.Context, request *pb.Set
 			Message: "Success",
 		},
 		Interface: &pb.Interface{
-			Name:              iface.Name,
+			Name:              iface.NativeName,
 			AliasName:         iface.AliasName,
-			NativeName:        iface.GetNativeName(),
 			MacAddress:        "",
 			OperationalStatus: string(iface.OperationStatus),
 			AdminStatus:       string(iface.AdminStatus),
@@ -246,7 +243,7 @@ func (s *proxyServer) GetInterfaceNeighbor(ctx context.Context, request *pb.GetI
 		TypeMeta: agent.TypeMeta{
 			Kind: agent.InterfaceKind,
 		},
-		Name: request.GetInterfaceName(),
+		NativeName: request.GetInterfaceName(),
 	})
 	if status != nil {
 		return &pb.GetInterfaceNeighborResponse{
@@ -411,6 +408,18 @@ func (s *proxyServer) GetReadiness(ctx context.Context, _ *pb.GetReadinessReques
 	return &pb.GetReadinessResponse{Ready: ready}, nil
 }
 
+func (s *proxyServer) Reprovision(ctx context.Context, _ *pb.ReprovisionRequest) (*pb.ReprovisionResponse, error) {
+	log.Printf("Reprovision called")
+
+	agentStatus := s.SwitchAgent.Reprovision(ctx)
+	if agentStatus != nil {
+		return &pb.ReprovisionResponse{
+			Status: &pb.Status{Code: agentStatus.Code, Message: agentStatus.Message},
+		}, nil
+	}
+	return &pb.ReprovisionResponse{}, nil
+}
+
 // NewProxyServer creates a proxyServer backed by the given SwitchAgent.
 // This is exported so tests can instantiate a server with a fake agent.
 func NewProxyServer(switchAgentImpl switchAgent.SwitchAgent) pb.SwitchAgentServiceServer {
@@ -505,12 +514,7 @@ func StartServer() {
 	}
 
 	pb.RegisterSwitchAgentServiceServer(s, NewProxyServer(swAgent))
-	pb.RegisterDeviceProviderServiceServer(s, NewDeviceProviderServer(swAgent))
-	pb.RegisterInterfaceProviderServiceServer(s, NewInterfaceProviderServer(swAgent))
-	pb.RegisterDHCPRelayProviderServiceServer(s, NewDHCPRelayProviderServer(swAgent))
-	pb.RegisterVLANProviderServiceServer(s, NewVLANProviderServer(swAgent))
-	pb.RegisterLLDPProviderServiceServer(s, NewLLDPProviderServer(swAgent))
-	pb.RegisterWireSonicSwitchServiceServer(s, NewWireSonicSwitchServer(swAgent))
+	pb.RegisterFabricSonicServiceServer(s, NewFabricSonicServiceServer(swAgent))
 
 	// Register reflection service on gRPC server for debugging
 	reflection.Register(s)

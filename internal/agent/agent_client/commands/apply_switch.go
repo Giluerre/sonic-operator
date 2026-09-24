@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 
-	pb "github.com/ironcore-dev/sonic-operator/internal/agent/proto"
+	pb "github.com/ironcore-dev/sonic-operator/pkg/agent/proto"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
 
@@ -21,7 +21,7 @@ type ApplySwitchOptions struct {
 }
 
 // ApplySwitch returns a cobra command that reads a SwitchConfig JSON file and
-// calls the WireSonicSwitchService.ApplySwitch RPC.
+// calls the FabricSonicSwitchService.ApplySwitch RPC.
 //
 // The config file must be a JSON document matching the proto SwitchConfig message
 // (protojson format — camelCase field names, e.g. {"hostname":"leaf-1","vlans":[...]}).
