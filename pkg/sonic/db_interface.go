@@ -13,74 +13,39 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+func hgetIsUp(ctx context.Context, client *redis.Client, key, field string) (bool, error) {
+	val, err := client.HGet(ctx, key, field).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return false, nil
+		}
+		return false, err
+	}
+	return val == "up", nil
+}
+
 func (db *dbAccessor) GetAdminStatus(ctx context.Context, interfaceName string) (bool, error) {
-	if strings.HasPrefix(interfaceName, "Loopback") {
-		val, err := db.configDB.HGet(ctx, "LOOPBACK_INTERFACE|"+interfaceName, "admin_status").Result()
-		if err != nil {
-			if errors.Is(err, redis.Nil) {
-				return false, nil
-			}
-			return false, fmt.Errorf("failed to get admin status for %s: %w", interfaceName, err)
-		}
-		return val == "up", nil
-	}
-	if strings.HasPrefix(interfaceName, "Vlan") {
-		val, err := db.applDB.HGet(ctx, "VLAN_TABLE:"+interfaceName, "admin_status").Result()
-		if err != nil {
-			if errors.Is(err, redis.Nil) {
-				return false, nil
-			}
-			return false, fmt.Errorf("failed to get admin status for %s: %w", interfaceName, err)
-		}
-		return val == "up", nil
-	}
-	if strings.HasPrefix(interfaceName, "Ethernet") {
-		val, err := db.applDB.HGet(ctx, "PORT_TABLE:"+interfaceName, "admin_status").Result()
-		if err != nil {
-			if errors.Is(err, redis.Nil) {
-				return false, nil
-			}
-			return false, fmt.Errorf("failed to get admin status for %s: %w", interfaceName, err)
-		}
-		return val == "up", nil
+	switch {
+	case strings.HasPrefix(interfaceName, "Loopback"):
+		return hgetIsUp(ctx, db.configDB, "LOOPBACK_INTERFACE|"+interfaceName, "admin_status")
+	case strings.HasPrefix(interfaceName, "Vlan"):
+		return hgetIsUp(ctx, db.applDB, "VLAN_TABLE:"+interfaceName, "admin_status")
+	case strings.HasPrefix(interfaceName, "Ethernet"):
+		return hgetIsUp(ctx, db.applDB, "PORT_TABLE:"+interfaceName, "admin_status")
 	}
 	return false, fmt.Errorf("unknown interface: %s", interfaceName)
 }
 
 func (db *dbAccessor) GetOperStatus(ctx context.Context, interfaceName string) (bool, error) {
-	if strings.HasPrefix(interfaceName, "Loopback") {
-		// SONiC does not publish a separate oper_status for loopbacks;
-		// oper-status mirrors admin_status for loopback interfaces.
-		val, err := db.configDB.HGet(ctx, "LOOPBACK_INTERFACE|"+interfaceName, "admin_status").Result()
-		if err != nil {
-			if errors.Is(err, redis.Nil) {
-				return false, nil
-			}
-			return false, fmt.Errorf("failed to get oper status for %s: %w", interfaceName, err)
-		}
-		return val == "up", nil
-	}
-	if strings.HasPrefix(interfaceName, "Vlan") {
-		// SONiC does not publish a separate oper_status for VLANs;
-		// oper-status mirrors admin_status for VLAN interfaces.
-		val, err := db.applDB.HGet(ctx, "VLAN_TABLE:"+interfaceName, "admin_status").Result()
-		if err != nil {
-			if errors.Is(err, redis.Nil) {
-				return false, nil
-			}
-			return false, fmt.Errorf("failed to get oper status for %s: %w", interfaceName, err)
-		}
-		return val == "up", nil
-	}
-	if strings.HasPrefix(interfaceName, "Ethernet") {
-		val, err := db.applDB.HGet(ctx, "PORT_TABLE:"+interfaceName, "oper_status").Result()
-		if err != nil {
-			if errors.Is(err, redis.Nil) {
-				return false, nil
-			}
-			return false, fmt.Errorf("failed to get oper status for %s: %w", interfaceName, err)
-		}
-		return val == "up", nil
+	switch {
+	case strings.HasPrefix(interfaceName, "Loopback"):
+		// SONiC does not publish a separate oper_status for loopbacks; mirrors admin_status.
+		return hgetIsUp(ctx, db.configDB, "LOOPBACK_INTERFACE|"+interfaceName, "admin_status")
+	case strings.HasPrefix(interfaceName, "Vlan"):
+		// SONiC does not publish a separate oper_status for VLANs; mirrors admin_status.
+		return hgetIsUp(ctx, db.applDB, "VLAN_TABLE:"+interfaceName, "admin_status")
+	case strings.HasPrefix(interfaceName, "Ethernet"):
+		return hgetIsUp(ctx, db.applDB, "PORT_TABLE:"+interfaceName, "oper_status")
 	}
 	return false, fmt.Errorf("unknown interface: %s", interfaceName)
 }
