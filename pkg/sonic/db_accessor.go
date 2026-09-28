@@ -5,6 +5,7 @@ package sonic
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -107,6 +108,31 @@ func scanKeys(ctx context.Context, client *redis.Client, pattern string) ([]stri
 		}
 	}
 	return keys, nil
+}
+
+func validatePortName(portName string) error {
+	if strings.HasPrefix(portName, "Ethernet") {
+		return nil
+	}
+	return fmt.Errorf("invalid port name %q: must start with Ethernet", portName)
+}
+
+func validateVlanName(vlanName string) error {
+	if !strings.HasPrefix(vlanName, "Vlan") {
+		return fmt.Errorf("invalid VLAN name %q: must start with Vlan", vlanName)
+	}
+	id, err := strconv.Atoi(strings.TrimPrefix(vlanName, "Vlan"))
+	if err != nil || id < 1 || id > 4094 {
+		return fmt.Errorf("invalid VLAN name %q: numeric suffix must be between 1 and 4094", vlanName)
+	}
+	return nil
+}
+
+func validateLoopbackName(loopbackName string) error {
+	if !strings.HasPrefix(loopbackName, "Loopback") {
+		return fmt.Errorf("invalid loopback name %q: must start with Loopback", loopbackName)
+	}
+	return nil
 }
 
 // ParseSupportedSpeeds converts a comma-separated Mbps string to a Gbps slice (values divided by 1000),

@@ -26,6 +26,9 @@ func (db *dbAccessor) ListPortNames(ctx context.Context) ([]string, error) {
 }
 
 func (db *dbAccessor) GetPortSpeed(ctx context.Context, portName string) (int, error) {
+	if err := validatePortName(portName); err != nil {
+		return 0, err
+	}
 	raw, err := db.configDB.HGet(ctx, "PORT|"+portName, "speed").Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
@@ -38,6 +41,9 @@ func (db *dbAccessor) GetPortSpeed(ctx context.Context, portName string) (int, e
 }
 
 func (db *dbAccessor) GetPortSupportedSpeeds(ctx context.Context, portName string) (string, error) {
+	if err := validatePortName(portName); err != nil {
+		return "", err
+	}
 	raw, err := db.stateDB.HGet(ctx, "PORT_TABLE|"+portName, "supported_speeds").Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
@@ -49,6 +55,9 @@ func (db *dbAccessor) GetPortSupportedSpeeds(ctx context.Context, portName strin
 }
 
 func (db *dbAccessor) GetTransceiverType(ctx context.Context, portName string) (string, error) {
+	if err := validatePortName(portName); err != nil {
+		return "", err
+	}
 	t, err := db.stateDB.HGet(ctx, "TRANSCEIVER_INFO|"+portName, "type").Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
@@ -60,6 +69,9 @@ func (db *dbAccessor) GetTransceiverType(ctx context.Context, portName string) (
 }
 
 func (db *dbAccessor) GetPortAlias(ctx context.Context, portName string) (string, error) {
+	if err := validatePortName(portName); err != nil {
+		return "", err
+	}
 	alias, err := db.configDB.HGet(ctx, "PORT|"+portName, "alias").Result()
 	if err != nil {
 		return "", fmt.Errorf("failed to get alias for port %s: %w", portName, err)
@@ -70,6 +82,9 @@ func (db *dbAccessor) GetPortAlias(ctx context.Context, portName string) (string
 // GetLLDPEntry returns the LLDP_ENTRY_TABLE fields for portName from APPL_DB.
 // Returns nil map when the entry does not exist.
 func (db *dbAccessor) GetLLDPEntry(ctx context.Context, portName string) (map[string]string, error) {
+	if err := validatePortName(portName); err != nil {
+		return nil, err
+	}
 	key := "LLDP_ENTRY_TABLE:" + portName
 	fields, err := db.applDB.HGetAll(ctx, key).Result()
 	if err != nil {
@@ -100,6 +115,9 @@ func (db *dbAccessor) ListPortTableEntries(ctx context.Context) (map[string]map[
 }
 
 func (db *dbAccessor) HasPort(ctx context.Context, portName string) (bool, error) {
+	if err := validatePortName(portName); err != nil {
+		return false, err
+	}
 	n, err := db.configDB.Exists(ctx, "PORT|"+portName).Result()
 	if err != nil {
 		return false, fmt.Errorf("failed to check existence of port %s: %w", portName, err)
@@ -108,8 +126,11 @@ func (db *dbAccessor) HasPort(ctx context.Context, portName string) (bool, error
 }
 
 func (db *dbAccessor) SetMTU(ctx context.Context, portName string, mtu int) error {
-	if strings.HasPrefix(portName, "Loopback") {
-		return fmt.Errorf("MTU cannot be set on loopback interface %s", portName)
+	if err := validatePortName(portName); err != nil {
+		return err
+	}
+	if mtu < 68 || mtu > 9216 {
+		return fmt.Errorf("invalid MTU %d for %s: must be between 68 and 9216", mtu, portName)
 	}
 	if err := db.configDB.HSet(ctx, "PORT|"+portName, "mtu", strconv.Itoa(mtu)).Err(); err != nil {
 		return fmt.Errorf("failed to set MTU for %s: %w", portName, err)
@@ -118,6 +139,9 @@ func (db *dbAccessor) SetMTU(ctx context.Context, portName string, mtu int) erro
 }
 
 func (db *dbAccessor) SetFEC(ctx context.Context, portName string, fec string) error {
+	if err := validatePortName(portName); err != nil {
+		return err
+	}
 	switch fec {
 	case "rs", "fc", "none":
 	default:
@@ -130,6 +154,9 @@ func (db *dbAccessor) SetFEC(ctx context.Context, portName string, fec string) e
 }
 
 func (db *dbAccessor) SetSpeed(ctx context.Context, portName string, speedMbps int) error {
+	if err := validatePortName(portName); err != nil {
+		return err
+	}
 	if speedMbps <= 0 {
 		return fmt.Errorf("invalid speed %d for %s: must be positive", speedMbps, portName)
 	}
@@ -140,6 +167,12 @@ func (db *dbAccessor) SetSpeed(ctx context.Context, portName string, speedMbps i
 }
 
 func (db *dbAccessor) SetPortAlias(ctx context.Context, portName, alias string) error {
+	if err := validatePortName(portName); err != nil {
+		return err
+	}
+	if alias == "" {
+		return fmt.Errorf("alias must not be empty for port %s", portName)
+	}
 	if err := db.configDB.HSet(ctx, "PORT|"+portName, "alias", alias).Err(); err != nil {
 		return fmt.Errorf("failed to set alias for port %s: %w", portName, err)
 	}

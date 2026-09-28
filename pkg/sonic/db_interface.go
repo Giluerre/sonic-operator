@@ -5,29 +5,42 @@ package sonic
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func (db *dbAccessor) GetAdminStatus(ctx context.Context, interfaceName string) (bool, error) {
 	if strings.HasPrefix(interfaceName, "Loopback") {
 		val, err := db.configDB.HGet(ctx, "LOOPBACK_INTERFACE|"+interfaceName, "admin_status").Result()
 		if err != nil {
-			return false, nil
+			if errors.Is(err, redis.Nil) {
+				return false, nil
+			}
+			return false, fmt.Errorf("failed to get admin status for %s: %w", interfaceName, err)
 		}
 		return val == "up", nil
 	}
 	if strings.HasPrefix(interfaceName, "Vlan") {
 		val, err := db.applDB.HGet(ctx, "VLAN_TABLE:"+interfaceName, "admin_status").Result()
 		if err != nil {
-			return false, nil
+			if errors.Is(err, redis.Nil) {
+				return false, nil
+			}
+			return false, fmt.Errorf("failed to get admin status for %s: %w", interfaceName, err)
 		}
 		return val == "up", nil
 	}
 	if strings.HasPrefix(interfaceName, "Ethernet") {
 		val, err := db.applDB.HGet(ctx, "PORT_TABLE:"+interfaceName, "admin_status").Result()
 		if err != nil {
-			return false, nil
+			if errors.Is(err, redis.Nil) {
+				return false, nil
+			}
+			return false, fmt.Errorf("failed to get admin status for %s: %w", interfaceName, err)
 		}
 		return val == "up", nil
 	}
@@ -40,21 +53,32 @@ func (db *dbAccessor) GetOperStatus(ctx context.Context, interfaceName string) (
 		// oper-status mirrors admin_status for loopback interfaces.
 		val, err := db.configDB.HGet(ctx, "LOOPBACK_INTERFACE|"+interfaceName, "admin_status").Result()
 		if err != nil {
-			return false, nil // absent means down
+			if errors.Is(err, redis.Nil) {
+				return false, nil
+			}
+			return false, fmt.Errorf("failed to get oper status for %s: %w", interfaceName, err)
 		}
 		return val == "up", nil
 	}
 	if strings.HasPrefix(interfaceName, "Vlan") {
+		// SONiC does not publish a separate oper_status for VLANs;
+		// oper-status mirrors admin_status for VLAN interfaces.
 		val, err := db.applDB.HGet(ctx, "VLAN_TABLE:"+interfaceName, "admin_status").Result()
 		if err != nil {
-			return false, nil // absent means down
+			if errors.Is(err, redis.Nil) {
+				return false, nil
+			}
+			return false, fmt.Errorf("failed to get oper status for %s: %w", interfaceName, err)
 		}
 		return val == "up", nil
 	}
 	if strings.HasPrefix(interfaceName, "Ethernet") {
 		val, err := db.applDB.HGet(ctx, "PORT_TABLE:"+interfaceName, "oper_status").Result()
 		if err != nil {
-			return false, nil // absent means down
+			if errors.Is(err, redis.Nil) {
+				return false, nil
+			}
+			return false, fmt.Errorf("failed to get oper status for %s: %w", interfaceName, err)
 		}
 		return val == "up", nil
 	}
@@ -70,8 +94,12 @@ func (db *dbAccessor) SetAdminStatus(ctx context.Context, interfaceName string, 
 		key = "LOOPBACK_INTERFACE|" + interfaceName
 	} else if strings.HasPrefix(interfaceName, "Vlan") {
 		key = "VLAN|" + interfaceName
-	} else {
+	} else if strings.HasPrefix(interfaceName, "Ethernet") {
 		key = "PORT|" + interfaceName
+	} else if strings.HasPrefix(interfaceName, "PortChannel") {
+		key = "PORTCHANNEL|" + interfaceName
+	} else {
+		return fmt.Errorf("unknown interface type for admin status: %s", interfaceName)
 	}
 	if err := db.configDB.HSet(ctx, key, "admin_status", adminStatus).Err(); err != nil {
 		return fmt.Errorf("failed to set admin status for %s: %w", interfaceName, err)
@@ -95,6 +123,9 @@ func interfaceIPTable(interfaceName string) (string, error) {
 }
 
 func (db *dbAccessor) EnsureLoopback(ctx context.Context, loopbackName string) error {
+	if err := validateLoopbackName(loopbackName); err != nil {
+		return err
+	}
 	if err := db.configDB.HSet(ctx, "LOOPBACK_INTERFACE|"+loopbackName, "NULL", "NULL").Err(); err != nil {
 		return fmt.Errorf("failed to ensure loopback interface %s: %w", loopbackName, err)
 	}
@@ -102,6 +133,9 @@ func (db *dbAccessor) EnsureLoopback(ctx context.Context, loopbackName string) e
 }
 
 func (db *dbAccessor) DeleteLoopback(ctx context.Context, loopbackName string) error {
+	if err := validateLoopbackName(loopbackName); err != nil {
+		return err
+	}
 	if err := db.configDB.Del(ctx, "LOOPBACK_INTERFACE|"+loopbackName).Err(); err != nil {
 		return fmt.Errorf("failed to delete loopback interface %s: %w", loopbackName, err)
 	}
@@ -114,6 +148,9 @@ func (db *dbAccessor) AddIPAddresses(ctx context.Context, interfaceName string, 
 		return err
 	}
 	for _, prefix := range prefixes {
+		if _, err := netip.ParsePrefix(prefix); err != nil {
+			return fmt.Errorf("invalid IP prefix %q: %w", prefix, err)
+		}
 		if err := db.configDB.HSet(ctx, table+"|"+interfaceName+"|"+prefix, "NULL", "NULL").Err(); err != nil {
 			return fmt.Errorf("failed to add IP %s to %s: %w", prefix, interfaceName, err)
 		}
@@ -127,6 +164,9 @@ func (db *dbAccessor) RemoveIPAddresses(ctx context.Context, interfaceName strin
 		return err
 	}
 	for _, prefix := range prefixes {
+		if _, err := netip.ParsePrefix(prefix); err != nil {
+			return fmt.Errorf("invalid IP prefix %q: %w", prefix, err)
+		}
 		if err := db.configDB.Del(ctx, table+"|"+interfaceName+"|"+prefix).Err(); err != nil {
 			return fmt.Errorf("failed to remove IP %s from %s: %w", prefix, interfaceName, err)
 		}

@@ -9,6 +9,9 @@ import (
 )
 
 func (db *dbAccessor) SetHostname(ctx context.Context, hostname string) error {
+	if hostname == "" {
+		return fmt.Errorf("hostname must not be empty")
+	}
 	if err := db.configDB.HSet(ctx, "DEVICE_METADATA|localhost", "hostname", hostname).Err(); err != nil {
 		return fmt.Errorf("failed to set hostname: %w", err)
 	}
